@@ -30,7 +30,7 @@ class TOLD(nn.Module):
 
 class Agent:
     def __init__(self, is_image, obs_dim, frame_cnt, img_sz, latent_dim, action_dim, lr, nums_samples = 500, num_pi_trajs = 50, num_horizon = 5, iterations = 10, rho = 0.5, consistency_coef = 2, reward_coef = 0.5, value_coef = 0.1):
-        self.device = torch.device('cpu')
+        self.device = torch.device('cuda')
         self.model = TOLD(frame_cnt, img_sz, latent_dim, action_dim[0], is_image, obs_dim[0]).to(self.device)
         self.model_target = deepcopy(self.model)
         self.optim = torch.optim.Adam(self.model.parameters(), lr=lr)
@@ -144,7 +144,7 @@ class Agent:
         return td_target
 
     def update_model(self, replay_buffer, step, target_update_freq, tau):
-        obs, action, reward, discount, next_obses = [x.float() for x in next(replay_buffer)]
+        obs, action, reward, discount, next_obses = [x.float().to(self.device) for x in next(replay_buffer)]
         start_idx = random.randint(0, len(reward)-self.horizon)
 
         self.optim.zero_grad()
