@@ -31,16 +31,17 @@ class PolicyNN(nn.Module):
                     nn.ReLU(inplace=True),
                     nn.Linear(64, 128),
                     nn.ReLU(inplace=True),
-                    nn.Linear(128, action_dim))
+                    nn.Linear(128, action_dim*2))
+        self.action_dim = action_dim
 
     def forward(self, latent_z):
-        mu = self.policy(latent_z)
+        output = self.policy(latent_z)
 
-        if(std > 0):
-            std = torch.ones_like(mu) * std
-            return utils.TruncatedNormal(mu, std).sample(clip=0.3)
-        
-        return mu
+        mu, log_std = torch.split(output, [self.action_dim, output.shape[-1] - self.action_dim], dim=-1)
+
+        std = torch.tanh(log_std).exp()+1e-3
+        dist = utils.TruncatedNormal(mu, std)
+        return dist.sample(clip=0.3)
 
 class QNN(nn.Module):
     def __init__(self, latent_dim, action_dim):
@@ -61,7 +62,7 @@ class QNN(nn.Module):
         self.apply(utils.weight_init)
 
     def forward(self, latent_z, action):
-        input = torch.cat([latent_z, action], dim=1)
+        input = torch.cat([latent_z, action], dim=-1)
         q1 = self.Q1(input)
         q2 = self.Q2(input)
         
@@ -72,7 +73,8 @@ class EncoderNN(nn.Module):
         super(EncoderNN, self).__init__()
 
         if(is_image is False):
-            self.enc = nn.Sequential(nn.Linear(obs_dim, 64), 
+            self.enc = nn.Sequential(
+                    nn.Linear(obs_dim, 64),
                     nn.ReLU(inplace=True),
                     nn.Linear(64, 128),
                     nn.ReLU(inplace=True),
@@ -96,7 +98,9 @@ class EncoderNN(nn.Module):
         return (nn.Sequential(*layers) if isinstance(layers, list) else layers)(x).squeeze(0).shape
 
     def forward(self, obs):
-        return self.enc(obs)
+        x = self.enc(obs)
+        
+        return x
     
 class DynamicsNN(nn.Module):
     def __init__(self, latent_dim, action_dim):

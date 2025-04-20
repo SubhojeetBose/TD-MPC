@@ -118,7 +118,7 @@ class Workspace:
                     action = self.agent.plan(self.global_step,
                         time_step.observation[self.cfg.obs_type],
                         1,
-                        t0=step==0,
+                        step==0,
                         eval_mode=True,
                     )
                 time_step = self.eval_env.step(action)
@@ -257,7 +257,7 @@ class Workspace:
 
 @hydra.main(config_path="cfgs", config_name="config")
 def main(cfg):
-    from train_rl import Workspace as W
+    from train_tdmpc import Workspace as W
 
     workspace = W(cfg)
     workspace.train()

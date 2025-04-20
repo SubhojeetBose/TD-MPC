@@ -1,5 +1,5 @@
 # @package agent
-_target_: agent.td_mpc.TDMPC
+_target_: agent.tdmpc.Agent
 is_image: False
 obs_dim: ???
 frame_cnt: 3
