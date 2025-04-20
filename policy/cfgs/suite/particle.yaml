@@ -1,0 +1,36 @@
+# @package suite
+defaults:
+  - _self_
+  - particle_task@_global_: reach
+
+suite: particle
+
+name: 'particle'
+
+# task settings
+frame_stack: 1
+action_repeat: 1
+discount: 0.99
+hidden_dim: 256
+height: 200
+width: 200
+
+# train settings
+num_train_frames: 50000
+num_seed_frames: 500
+
+# eval
+eval_every_frames: 500
+num_eval_episodes: 10
+
+# snapshot
+save_snapshot: true
+
+task_make_fn:
+  _target_: suite.particle.make
+  name: ${task_name}
+  seed: ${seed}
+  height: ${suite.height}
+  width: ${suite.width}
+  block: null
+  reward_type: ${reward_type}

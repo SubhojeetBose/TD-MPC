@@ -1,0 +1,31 @@
+defaults:
+  - _self_
+  - agent: bcrl
+  - suite: particle
+  - override hydra/launcher: submitit_local
+
+# replay buffer
+replay_buffer_size: 150000
+replay_buffer_num_workers: 2
+nstep: 3
+batch_size: 256
+# misc
+seed: 0
+device: cpu
+save_video: true
+save_train_video: false
+use_tb: true
+
+# experiment
+obs_type: 'features'
+reward_type: 'dense' # dense, sparse
+experiment: rl
+
+# expert dataset
+num_demos: 100
+expert_dataset: /Users/subhojeetbose/Downloads/assignment 3/bc.pkl
+
+hydra:
+  run:
+    dir: ./exp_local/${now:%Y.%m.%d}_${experiment}/${now:%H%M%S}
+

@@ -1,0 +1,5 @@
+defaults:
+  - _self_
+
+task_name: particle-v0
+num_train_frames_bc: 6010

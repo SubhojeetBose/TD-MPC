@@ -1,0 +1,21 @@
+# @package agent
+_target_: agent.td_mpc.TDMPC
+frame_cnt: 3
+img_sz: 64
+latent_dim: 50
+action_dim: ???
+lr: 1e-3
+nums_samples: 500
+num_pi_trajs: 50
+num_horizon: 5
+iterations: 10
+rho: 0.5
+consistency_coef: 2
+reward_coef: 0.5
+value_coef: 0.1
+target_update_freq: 2
+tau: 0.01
+
+
+
+
