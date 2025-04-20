@@ -1,5 +1,7 @@
 # @package agent
 _target_: agent.td_mpc.TDMPC
+is_image: False
+obs_dim: ???
 frame_cnt: 3
 img_sz: 64
 latent_dim: 50
@@ -13,8 +15,6 @@ rho: 0.5
 consistency_coef: 2
 reward_coef: 0.5
 value_coef: 0.1
-target_update_freq: 2
-tau: 0.01
 
 
 

@@ -15,6 +15,8 @@ device: cpu
 save_video: true
 save_train_video: false
 use_tb: true
+target_update_freq: 2
+tau: 0.01
 
 # experiment
 obs_type: 'features'

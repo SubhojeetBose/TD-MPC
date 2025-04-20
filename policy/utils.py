@@ -220,18 +220,3 @@ def update_mean_var_count_from_moments(
     new_count = tot_count
 
     return new_mean, new_var, new_count
-
-class ReplayBuffer:
-    def __init__(self, capacity=100000):
-        self.buffer = deque(maxlen=capacity)
-
-    def push(self, transition):
-        self.buffer.append(transition)
-
-    def sample(self, batch_size):
-        samples = random.sample(self.buffer, batch_size)
-        s, nxt_s, a, r, idx = zip(*samples)
-        return map(lambda x: torch.tensor(x, dtype=torch.float32), (s, nxt_s, a, r, idx))
-
-    def __len__(self):
-        return len(self.buffer)

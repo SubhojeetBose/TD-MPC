@@ -68,9 +68,17 @@ class QNN(nn.Module):
         return torch.minimum(q1, q2)
 
 class EncoderNN(nn.Module):
-    def __init__(self, frame_cnt, img_sz, latent_dim):
+    def __init__(self, frame_cnt, img_sz, latent_dim, is_image, obs_dim):
         super(EncoderNN, self).__init__()
 
+        if(is_image is False):
+            self.enc = nn.Sequential(nn.Linear(obs_dim, 64), 
+                    nn.ReLU(inplace=True),
+                    nn.Linear(64, 128),
+                    nn.ReLU(inplace=True),
+                    nn.Linear(128, latent_dim))
+            return
+        
         C = int(3*frame_cnt)
 
         layers = [nn.Conv2d(C, 32, 7, stride=2), nn.ReLU(),

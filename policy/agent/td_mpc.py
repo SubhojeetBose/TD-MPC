@@ -4,11 +4,12 @@ from copy import deepcopy
 import utils
 import numpy as np
 import torch.nn.functional as F
+import random 
 
 class TOLD(nn.Module):
-    def __init__(self, frame_cnt, img_sz, latent_dim, action_dim):
+    def __init__(self, frame_cnt, img_sz, latent_dim, action_dim, is_image, obs_dim):
         super().__init__()
-        self._encoder = networks.EncoderNN(frame_cnt, img_sz, latent_dim)
+        self._encoder = networks.EncoderNN(frame_cnt, img_sz, latent_dim, is_image, obs_dim)
         self._dynamics = networks.DynamicsNN(latent_dim, action_dim)
         self._reward = networks.RewardNN(latent_dim, action_dim)
         self._policy = networks.PolicyNN(latent_dim, action_dim)
@@ -27,9 +28,9 @@ class TOLD(nn.Module):
         return self._q(latent_z, action)
 
 class TDMPC():
-    def __init__(self, frame_cnt, img_sz, latent_dim, action_dim, lr, nums_samples = 500, num_pi_trajs = 50, num_horizon = 5, iterations = 10, rho = 0.5, consistency_coef = 2, reward_coef = 0.5, value_coef = 0.1):
+    def __init__(self, is_image, obs_dim, frame_cnt, img_sz, latent_dim, action_dim, lr, nums_samples = 500, num_pi_trajs = 50, num_horizon = 5, iterations = 10, rho = 0.5, consistency_coef = 2, reward_coef = 0.5, value_coef = 0.1):
         self.device = torch.device('cuda')
-        self.model = TOLD(frame_cnt, img_sz, latent_dim, action_dim).cuda()
+        self.model = TOLD(frame_cnt, img_sz, latent_dim, action_dim, is_image, obs_dim).cuda()
         self.model_target = deepcopy(self.model)
         self.optim = torch.optim.Adam(self.model.parameters(), lr=lr)
         self.pi_optim = torch.optim.Adam(self.model._pi.parameters(), lr=lr)
@@ -46,6 +47,7 @@ class TDMPC():
         self.consistency_coef = consistency_coef
         self.reward_coef = reward_coef
         self.value_coef = value_coef
+        self._prev_mean = None
     
     @torch.no_grad()
     def estimate_value(self, latent_z, actions, horizon, gamma):
@@ -59,9 +61,9 @@ class TDMPC():
     
 
     @torch.no_grad()
-    def plan(self, step, obs, isFirst = True, eval_mode = False):
+    def plan(self, step, obs, num_seed_step, isFirst = True, eval_mode = False):
         # Use random actions for first 5000 steps
-        if step < 5000 and not eval_mode:
+        if step < num_seed_step and not eval_mode:
             return torch.empty(self.action_dim, dtype=torch.float32, device=self.device).uniform_(-1, 1)
         
         obs = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
@@ -77,7 +79,7 @@ class TDMPC():
         latent_z = self.model.encoder_states(obs).repeat(self.num_samples+self.num_pi_trajs, 1)
         mean = torch.zeros(self.horizon, self.action_dim, device=self.device)
         std = 2*torch.ones(self.horizon, self.action_dim, device=self.device)
-        if not isFirst and hasattr(self, '_prev_mean'):
+        if not isFirst and self._prev_mean is not None:
             mean[:-1] = self._prev_mean[1:]
 
         # random shooting
@@ -135,17 +137,19 @@ class TDMPC():
         return td_target
 
     def update_model(self, replay_buffer, step, target_update_freq, tau):
-        obs, next_obses, action, reward, idxs = replay_buffer.sample(self.horizon)
+        obs, action, reward, discount, next_obses = [x.float() for x in next(replay_buffer)]
+        start_idx = random.randint(0, len(reward)-self.horizon)
+
         self.optim.zero_grad()
         self.model.train()
 
         # get latent_z after running random augmentation
-        latent_z = self.model.encoder_states(self.aug(obs[0]))
+        latent_z = self.model.encoder_states(self.aug(obs[start_idx]))
         latent_zs = [latent_z.detach()]
 
         # calculating the loss
         consistency_loss, reward_loss, value_loss = 0, 0, 0
-        for t in range(self.horizon):
+        for t in range(start_idx, start_idx+self.horizon):
             q_value = self.model.get_q(latent_z, action[t])
             latent_z, reward_pred = self.model.next(latent_z, action[t])
 

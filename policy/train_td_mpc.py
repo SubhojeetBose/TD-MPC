@@ -25,8 +25,8 @@ torch.backends.cudnn.benchmark = True
 
 
 def make_agent(obs_spec, action_spec, cfg):
-    cfg.agent.obs_shape = obs_spec[cfg.obs_type].shape
-    cfg.agent.action_shape = action_spec.shape
+    cfg.agent.obs_dim = obs_spec[cfg.obs_type].shape
+    cfg.agent.action_dim = action_spec.shape
     return hydra.utils.instantiate(cfg.agent)
 
 
@@ -115,9 +115,10 @@ class Workspace:
             time_step = self.eval_env.reset()
             while not time_step.last():
                 with torch.no_grad(), utils.eval_mode(self.agent):
-                    action = self.agent.plan(
+                    action = self.agent.plan(self.global_step,
                         time_step.observation[self.cfg.obs_type],
-                        self.global_step,
+                        1,
+                        t0=step==0,
                         eval_mode=True,
                     )
                 time_step = self.eval_env.step(action)
@@ -162,6 +163,7 @@ class Workspace:
 
         self.train_video_recorder.init(time_step.observation[self.cfg.obs_type])
         metrics = None
+        is_start = True
         while train_until_step(self.global_step):
             if time_step.last():
                 self._global_episode += 1
@@ -201,6 +203,7 @@ class Workspace:
                 time_steps.append(time_step)
                 # observations.append(time_step.observation[self.cfg.obs_type])
                 # actions.append(time_step.action)
+                is_start = True
 
                 self.train_video_recorder.init(time_step.observation[self.cfg.obs_type])
                 # try to save snapshot
@@ -218,16 +221,17 @@ class Workspace:
 
             # sample action
             with torch.no_grad(), utils.eval_mode(self.agent):
-                action = self.agent.act(
-                    time_step.observation[self.cfg.obs_type],
-                    self.global_step,
-                    eval_mode=False,
-                )
+                action = self.agent.plan(self.global_step,
+                        time_step.observation[self.cfg.obs_type],
+                        self.cfg.suite.num_seed_frames,
+                        is_start,
+                        eval_mode=False,
+                    )
 
             # try to update the agent
             if not seed_until_step(self.global_step):
                 # Update
-                metrics = self.agent.update(self.replay_iter, self.global_step)
+                metrics = self.agent.update_model(self.replay_iter, self.global_step, self.cfg.target_update_freq, self.cfg.tau)
                 self.logger.log_metrics(metrics, self.global_frame, ty="train")
 
             # take env step
@@ -241,6 +245,7 @@ class Workspace:
             self.train_video_recorder.record(time_step.observation[self.cfg.obs_type])
             episode_step += 1
             self._global_step += 1
+            is_start = 0
 
     def save_snapshot(self):
         snapshot = self.work_dir / "snapshot.pt"
