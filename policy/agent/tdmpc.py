@@ -138,8 +138,7 @@ class Agent:
         return pi_loss.item()
 
     @torch.no_grad()
-    def get_td_target(self, next_obs, reward):
-        next_latent_z = self.model.encoder_states(next_obs)
+    def get_td_target(self, next_latent_z, reward):
         td_target = reward + 0.99 * torch.min(*self.model_target.get_q(next_latent_z, self.model.sample_action(next_latent_z)))
         
         return td_target
@@ -147,31 +146,32 @@ class Agent:
     def update_model(self, replay_buffer, step, target_update_freq, tau):
         obs, action, reward, discount, next_obses = [x.float().to(self.device) for x in next(replay_buffer)]
         start_idx = random.randint(0, len(reward)-self.horizon)
-        print(f">>>>{obs.shape}")
 
         self.optim.zero_grad()
         self.model.train()
 
         # get latent_z after running random augmentation
-        latent_z = self.model.encoder_states(obs[start_idx])
+        total_obs = torch.cat((obs[start_idx].unsqueeze(0), next_obses[start_idx:start_idx+self.horizon]), dim = 0)
+        latent_nxt_zs = self.model.encoder_states(total_obs)
+        latent_z = latent_nxt_zs[0]
+        latent_nxt_zs = latent_nxt_zs[1:]
         latent_zs = [latent_z.detach()]
 
         # calculating the loss
         consistency_loss, reward_loss, value_loss = 0, 0, 0
-        for t in range(start_idx, start_idx+self.horizon):
+        for t in range(self.horizon):
             q_value = self.model.get_q(latent_z, action[t])
             latent_z, reward_pred = self.model.next_state_reward(latent_z, action[t])
 
             with torch.no_grad():
-                next_obs = next_obses[t]
-                next_z_target = self.model_target.encoder_states(next_obs)
-                td_target = self.get_td_target(next_obs, reward[t])
+                next_z_target = latent_nxt_zs[t]
+                td_target = self.get_td_target(next_z_target, reward[t+start_idx])
             latent_zs.append(latent_z.detach())
 
             # losses
             rho = (self.rho ** t)
             consistency_loss += rho * torch.mean(F.mse_loss(latent_z, next_z_target), dim=-1, keepdim=True)
-            reward_loss += rho * F.mse_loss(reward_pred, reward[t])
+            reward_loss += rho * F.mse_loss(reward_pred, reward[t+start_idx])
             value_loss += rho * (F.mse_loss(q_value, td_target))
 
         total_loss = self.consistency_coef * consistency_loss.clamp(max=1e4) + \
