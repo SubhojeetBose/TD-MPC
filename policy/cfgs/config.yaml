@@ -1,7 +1,7 @@
 defaults:
   - _self_
   - agent: bcrl
-  - suite: particle
+  - suite: atari
   - override hydra/launcher: submitit_local
 
 # replay buffer
@@ -19,9 +19,10 @@ target_update_freq: 2
 tau: 0.01
 
 # experiment
-obs_type: 'features'
+obs_type: 'pixels'
 reward_type: 'dense' # dense, sparse
 experiment: rl
+frame_count: 3
 
 # expert dataset
 num_demos: 100

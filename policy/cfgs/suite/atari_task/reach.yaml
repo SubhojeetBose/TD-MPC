@@ -1,0 +1,5 @@
+defaults:
+  - _self_
+
+task_name: Pendulum-v1
+num_train_frames_bc: 6010

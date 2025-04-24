@@ -1,0 +1,36 @@
+# @package suite
+defaults:
+  - _self_
+  - atari_task@_global_: reach
+
+suite: atari
+
+name: 'atari'
+
+# task settings
+frame_stack: 1
+action_repeat: 1
+discount: 0.99
+hidden_dim: 256
+height: 64
+width: 64
+
+# train settings
+num_train_frames: 50000
+num_seed_frames: 500
+
+# eval
+eval_every_frames: 2000
+num_eval_episodes: 10
+
+# snapshot
+save_snapshot: false
+
+task_make_fn:
+  _target_: suite.atari.make
+  name: ${task_name}
+  seed: ${seed}
+  num_frames: ${frame_count}
+  height: ${suite.height}
+  width: ${suite.width}
+  obs_type: ${obs_type}

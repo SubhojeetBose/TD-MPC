@@ -95,7 +95,9 @@ class EncoderNN(nn.Module):
     def _get_out_shape(self, in_shape, layers):
         """Utility function. Returns the output shape of a network for a given input shape."""
         x = torch.randn(*in_shape).unsqueeze(0)
-        return (nn.Sequential(*layers) if isinstance(layers, list) else layers)(x).squeeze(0).shape
+        out_shape = (nn.Sequential(*layers) if isinstance(layers, list) else layers)(x).squeeze(0).shape
+        print(f">>>>{out_shape}")
+        return out_shape
 
     def forward(self, obs):
         x = self.enc(obs)

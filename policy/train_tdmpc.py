@@ -19,13 +19,25 @@ from replay_buffer import (
     make_replay_loader,
 )
 from video import TrainVideoRecorder, VideoRecorder
+from typing import NamedTuple, Any
+import gymnasium as gym
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 torch.backends.cudnn.benchmark = True
 
+class TimeStep(NamedTuple):
+    reward: Any
+    discount: Any
+    observation: Any
+    action: Any
+    done: bool
+    def last(self) -> bool:
+        return self.done
+    def __getitem__(self, key):
+        return getattr(self, key)
 
 def make_agent(obs_spec, action_spec, cfg):
-    cfg.agent.obs_dim = obs_spec[cfg.obs_type].shape
+    cfg.agent.obs_dim = obs_spec.shape
     cfg.agent.action_dim = action_spec.shape
     return hydra.utils.instantiate(cfg.agent)
 
@@ -41,7 +53,7 @@ class Workspace:
         self.setup()
 
         self.agent = make_agent(
-            self.train_env.observation_spec(), self.train_env.action_spec(), cfg
+            self.train_env.observation_space, self.train_env.action_space, cfg
         )
 
         self.timer = utils.Timer()
@@ -56,9 +68,13 @@ class Workspace:
         self.eval_env = hydra.utils.call(self.cfg.suite.task_make_fn)
 
         # create replay buffer
+        # HACK: replay buffer needs a spec name so adding one here:
+        setattr(gym.spaces.Box, "name", "")
+        self.train_env.observation_space.name = "observation"
+        self.train_env.action_space.name = "action"
         data_specs = [
-            self.train_env.observation_spec()[self.cfg.obs_type],
-            self.train_env.action_spec(),
+            self.train_env.observation_space,
+            self.train_env.action_space,
             specs.Array((1,), np.float32, "reward"),
             specs.Array((1,), np.float32, "discount"),
         ]
@@ -77,12 +93,12 @@ class Workspace:
 
         self._replay_iter = None
         
-        self.video_recorder = VideoRecorder(
-            self.work_dir if self.cfg.save_video else None
-        )
-        self.train_video_recorder = TrainVideoRecorder(
-            self.work_dir if self.cfg.save_train_video else None
-        )
+        # self.video_recorder = VideoRecorder(
+        #     self.work_dir if self.cfg.save_video else None
+        # )
+        # self.train_video_recorder = TrainVideoRecorder(
+        #     self.work_dir if self.cfg.save_train_video else None
+        # )
 
     @property
     def global_step(self):
@@ -106,37 +122,36 @@ class Workspace:
         step, episode, total_reward = 0, 0, 0
         eval_until_episode = utils.Until(self.cfg.suite.num_eval_episodes)
 
-        paths = []
-        self.video_recorder.init(self.eval_env, enabled=True)
+        # self.video_recorder.init(self.eval_env, enabled=True)
         while eval_until_episode(episode):
-            path = []
+            # path = []
             step = 0
 
-            time_step = self.eval_env.reset()
-            while not time_step.last():
+            obs, _ = self.eval_env.reset()
+            done = False
+            while not done:
                 with torch.no_grad(), utils.eval_mode(self.agent):
                     action = self.agent.plan(self.global_step,
-                        time_step.observation[self.cfg.obs_type],
+                        obs,
                         1,
                         step==0,
                         eval_mode=True,
                     )
-                time_step = self.eval_env.step(action)
-                path.append(time_step.observation["goal_achieved"])
-                self.video_recorder.record(self.eval_env)
-                total_reward += time_step.reward
+                obs, rew, terminated, truncated, _ = self.eval_env.step(action)
+                done = terminated or truncated
+                # self.video_recorder.record(self.eval_env)
+                total_reward += rew
                 step += 1
 
             episode += 1
-            paths.append(1 if np.sum(path) > 10 else 0)
-        self.video_recorder.save(f"{self.global_frame}.mp4")
+        # self.video_recorder.save(f"{self.global_frame}.mp4")
 
         with self.logger.log_and_dump_ctx(self.global_frame, ty="eval") as log:
             log("episode_reward", total_reward / episode)
             log("episode_length", step * self.cfg.suite.action_repeat / episode)
             log("episode", self.global_episode)
             log("step", self.global_step)
-            log("success_percentage", np.mean(paths))
+            # log("success_percentage", np.mean(paths))
 
     def train(self):
         # predicates
@@ -152,30 +167,32 @@ class Workspace:
 
         episode_step, episode_reward = 0, 0
 
+        obs, _ = self.train_env.reset()
+        done = False
+
+        # HACK: to prevent errors when using replay buffer
         time_steps = list()
-        # observations = list()
-        # actions = list()
+        def append_obs(obs):
+            random_action = self.train_env.action_space.sample()
+            time_step = TimeStep(observation=obs, reward=0.0, done=False, discount=1.0, action=random_action)
+            time_steps.append(time_step)
+        append_obs(obs)
 
-        time_step = self.train_env.reset()
-        time_steps.append(time_step)
-        # observations.append(time_step.observation[self.cfg.obs_type])
-        # actions.append(time_step.action)
-
-        self.train_video_recorder.init(time_step.observation[self.cfg.obs_type])
+        # self.train_video_recorder.init(time_step.observation[self.cfg.obs_type])
         metrics = None
         is_start = True
         while train_until_step(self.global_step):
-            if time_step.last():
+            if done:
                 self._global_episode += 1
-                if self._global_episode % 10 == 0:
-                    self.train_video_recorder.save(f"{self.global_frame}.mp4")
+                # if self._global_episode % 10 == 0:
+                    # self.train_video_recorder.save(f"{self.global_frame}.mp4")
                 # # wait until all the metrics schema is populated
                 # observations = np.stack(observations, 0)
                 # actions = np.stack(actions, 0)
 
                 for i, elt in enumerate(time_steps):
                     elt = elt._replace(
-                        observation=time_steps[i].observation[self.cfg.obs_type]
+                        observation=time_steps[i].observation
                     )
                     self.replay_storage.add(elt)
 
@@ -196,16 +213,13 @@ class Workspace:
 
                 # reset env
                 time_steps = list()
-                observations = list()
-                actions = list()
 
-                time_step = self.train_env.reset()
-                time_steps.append(time_step)
-                # observations.append(time_step.observation[self.cfg.obs_type])
-                # actions.append(time_step.action)
+                obs, _ = self.train_env.reset()
+                done = False
+                append_obs(obs)
                 is_start = True
 
-                self.train_video_recorder.init(time_step.observation[self.cfg.obs_type])
+                # self.train_video_recorder.init(time_step.observation[self.cfg.obs_type])
                 # try to save snapshot
                 if self.cfg.suite.save_snapshot:
                     self.save_snapshot()
@@ -222,7 +236,7 @@ class Workspace:
             # sample action
             with torch.no_grad(), utils.eval_mode(self.agent):
                 action = self.agent.plan(self.global_step,
-                        time_step.observation[self.cfg.obs_type],
+                        obs,
                         self.cfg.suite.num_seed_frames,
                         is_start,
                         eval_mode=False,
@@ -235,14 +249,14 @@ class Workspace:
                 self.logger.log_metrics(metrics, self.global_frame, ty="train")
 
             # take env step
-            time_step = self.train_env.step(action)
-            episode_reward += time_step.reward
+            obs, rew, terminated, truncated, _ = self.train_env.step(action)
+            done = terminated or truncated
+            episode_reward += rew
 
+            time_step = TimeStep(observation=obs, reward=rew, done=done, action=action, discount=1)
             time_steps.append(time_step)
-            # observations.append(time_step.observation[self.cfg.obs_type])
-            # actions.append(time_step.action)
 
-            self.train_video_recorder.record(time_step.observation[self.cfg.obs_type])
+            # self.train_video_recorder.record(time_step.observation[self.cfg.obs_type])
             episode_step += 1
             self._global_step += 1
             is_start = 0

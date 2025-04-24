@@ -1,0 +1,41 @@
+name: ddrlproj
+channels:
+  - defaults
+  - conda-forge
+  - pytorch-nightly
+  - conda-forge
+  - nvidia
+dependencies:
+  - python=3.8
+  - pip>=23.0
+  - numpy=1.24
+  - pandas=2.0.3
+  - jupyterlab=4.2
+  - mediapy=1.1.8
+  - matplotlib=3.7
+  - scipy=1.9
+  - scikit-learn=1.3
+  - scikit-image=0.20
+  - imageio=2.33
+  - imageio-ffmpeg=0.5
+  - pillow=10.4
+  - termcolor=2.1
+  - tqdm=4.66
+  - pip:
+    - mujoco
+    - dm_control
+    - gym==0.22.0
+    - hydra-core
+    - hydra-submitit-launcher
+    - ffmpeg-python
+    - opencv-python
+    - ipdb
+    - torch
+    - torchvision
+    - torchaudio
+    - protobuf
+    - tb-nightly
+    - pygame
+    - gymnasium
+    - gymnasium[Box2d]
+    - ale-py

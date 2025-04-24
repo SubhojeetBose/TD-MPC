@@ -1,8 +1,8 @@
 # @package agent
 _target_: agent.tdmpc.Agent
-is_image: False
+obs_type: ${obs_type}
 obs_dim: ???
-frame_cnt: 3
+frame_cnt: ${frame_count}
 img_sz: 64
 latent_dim: 50
 action_dim: ???
