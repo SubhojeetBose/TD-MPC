@@ -19,7 +19,7 @@ target_update_freq: 2
 tau: 0.01
 
 # experiment
-obs_type: 'features'
+obs_type: 'pixels'
 reward_type: 'dense' # dense, sparse
 experiment: rl
 frame_count: 3

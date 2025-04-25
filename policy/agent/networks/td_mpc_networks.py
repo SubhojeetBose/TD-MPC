@@ -11,9 +11,7 @@ class RewardNN(nn.Module):
         super(RewardNN, self).__init__()
 
         self.reward = nn.Sequential(
-                    nn.Linear(latent_dim+action_dim, 64), 
-                    nn.ReLU(inplace=True),
-                    nn.Linear(64, 128),
+                    nn.Linear(latent_dim+action_dim, 128), 
                     nn.ReLU(inplace=True),
                     nn.Linear(128, 1))
 
@@ -27,9 +25,7 @@ class PolicyNN(nn.Module):
         super(PolicyNN, self).__init__()
 
         self.policy = nn.Sequential(
-                    nn.Linear(latent_dim, 64), 
-                    nn.ReLU(inplace=True),
-                    nn.Linear(64, 128),
+                    nn.Linear(latent_dim, 128), 
                     nn.ReLU(inplace=True),
                     nn.Linear(128, action_dim*2))
         self.action_dim = action_dim
@@ -41,21 +37,17 @@ class PolicyNN(nn.Module):
 
         std = torch.tanh(log_std).exp()+1e-3
         dist = utils.TruncatedNormal(mu, std)
-        return dist.sample(clip=0.3)
+        return dist.sample(clip=1.)
 
 class QNN(nn.Module):
     def __init__(self, latent_dim, action_dim):
         super().__init__()
 
-        self.Q1 = nn.Sequential( nn.Linear(latent_dim+action_dim, 64),
-                            nn.ReLU(inplace=True),
-                            nn.Linear(64, 128),
+        self.Q1 = nn.Sequential( nn.Linear(latent_dim+action_dim, 128),
                             nn.ReLU(inplace=True),
                             nn.Linear(128, 1))
 
-        self.Q2 = nn.Sequential( nn.Linear(latent_dim+action_dim, 64),
-                            nn.ReLU(inplace=True),
-                            nn.Linear(64, 128),
+        self.Q2 = nn.Sequential( nn.Linear(latent_dim+action_dim, 128),
                             nn.ReLU(inplace=True),
                             nn.Linear(128, 1))
 
@@ -74,9 +66,7 @@ class EncoderNN(nn.Module):
 
         if(is_image is False):
             self.enc = nn.Sequential(
-                    nn.Linear(obs_dim, 64),
-                    nn.ReLU(inplace=True),
-                    nn.Linear(64, 128),
+                    nn.Linear(obs_dim, 128),
                     nn.ReLU(inplace=True),
                     nn.Linear(128, latent_dim))
             return
@@ -85,7 +75,6 @@ class EncoderNN(nn.Module):
 
         layers = [nn.Conv2d(C, 32, 7, stride=2), nn.ReLU(),
 				  nn.Conv2d(32, 64, 5, stride=2), nn.ReLU(),
-				  nn.Conv2d(64, 64, 3, stride=2), nn.ReLU(),
 				  nn.Conv2d(64, 128, 3, stride=2), nn.ReLU()]
         out_shape = self._get_out_shape((C, img_sz, img_sz), layers)
         layers.extend([nn.Flatten(), nn.Linear(np.prod(out_shape), latent_dim)])
@@ -96,7 +85,6 @@ class EncoderNN(nn.Module):
         """Utility function. Returns the output shape of a network for a given input shape."""
         x = torch.randn(*in_shape).unsqueeze(0)
         out_shape = (nn.Sequential(*layers) if isinstance(layers, list) else layers)(x).squeeze(0).shape
-        print(f">>>>{out_shape}")
         return out_shape
 
     def forward(self, obs):
@@ -109,9 +97,7 @@ class DynamicsNN(nn.Module):
         super(DynamicsNN, self).__init__()
 
         self.next_state = nn.Sequential(
-                    nn.Linear(latent_dim+action_dim, 64), 
-                    nn.ReLU(inplace=True),
-                    nn.Linear(64, 128),
+                    nn.Linear(latent_dim+action_dim, 128), 
                     nn.ReLU(inplace=True),
                     nn.Linear(128, latent_dim))
 

@@ -93,12 +93,12 @@ class Workspace:
 
         self._replay_iter = None
         
-        # self.video_recorder = VideoRecorder(
-        #     self.work_dir if self.cfg.save_video else None
-        # )
-        # self.train_video_recorder = TrainVideoRecorder(
-        #     self.work_dir if self.cfg.save_train_video else None
-        # )
+        self.video_recorder = VideoRecorder(
+            self.work_dir if self.cfg.save_video else None
+        )
+        self.train_video_recorder = TrainVideoRecorder(
+            self.work_dir if self.cfg.save_train_video else None
+        )
 
     @property
     def global_step(self):
@@ -121,8 +121,9 @@ class Workspace:
     def eval(self):
         step, episode, total_reward = 0, 0, 0
         eval_until_episode = utils.Until(self.cfg.suite.num_eval_episodes)
-
-        # self.video_recorder.init(self.eval_env, enabled=True)
+        
+        self.eval_env.reset()
+        self.video_recorder.init(self.eval_env, enabled=True)
         while eval_until_episode(episode):
             # path = []
             step = 0
@@ -139,12 +140,12 @@ class Workspace:
                     )
                 obs, rew, terminated, truncated, _ = self.eval_env.step(action)
                 done = terminated or truncated
-                # self.video_recorder.record(self.eval_env)
+                self.video_recorder.record(self.eval_env)
                 total_reward += rew
                 step += 1
 
             episode += 1
-        # self.video_recorder.save(f"{self.global_frame}.mp4")
+        self.video_recorder.save(f"{self.global_frame}.mp4")
 
         with self.logger.log_and_dump_ctx(self.global_frame, ty="eval") as log:
             log("episode_reward", total_reward / episode)
