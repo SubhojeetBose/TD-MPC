@@ -7,13 +7,13 @@ from torch import distributions as pyd
 from torch.distributions.utils import _standard_normal
 
 class RewardNN(nn.Module):
-    def __init__(self, latent_dim, action_dim):
+    def __init__(self, latent_dim, action_dim, hidden_dim=128):
         super(RewardNN, self).__init__()
 
         self.reward = nn.Sequential(
-                    nn.Linear(latent_dim+action_dim, 128), 
+                    nn.Linear(latent_dim+action_dim, hidden_dim), 
                     nn.ReLU(inplace=True),
-                    nn.Linear(128, 1))
+                    nn.Linear(hidden_dim, 1))
 
     def forward(self, latent_z, action):
         input = torch.cat([latent_z, action], dim=-1)
@@ -21,13 +21,13 @@ class RewardNN(nn.Module):
         return self.reward(input)
 
 class PolicyNN(nn.Module):
-    def __init__(self, latent_dim, action_dim):
+    def __init__(self, latent_dim, action_dim, hidden_dim=128):
         super(PolicyNN, self).__init__()
 
         self.policy = nn.Sequential(
-                    nn.Linear(latent_dim, 128), 
+                    nn.Linear(latent_dim, hidden_dim), 
                     nn.ReLU(inplace=True),
-                    nn.Linear(128, action_dim*2))
+                    nn.Linear(hidden_dim, action_dim*2))
         self.action_dim = action_dim
 
     def forward(self, latent_z):
@@ -40,16 +40,16 @@ class PolicyNN(nn.Module):
         return dist.sample(clip=1.)
 
 class QNN(nn.Module):
-    def __init__(self, latent_dim, action_dim):
+    def __init__(self, latent_dim, action_dim, hidden_dim=128):
         super().__init__()
 
-        self.Q1 = nn.Sequential( nn.Linear(latent_dim+action_dim, 128),
+        self.Q1 = nn.Sequential( nn.Linear(latent_dim+action_dim, hidden_dim),
                             nn.ReLU(inplace=True),
-                            nn.Linear(128, 1))
+                            nn.Linear(hidden_dim, 1))
 
-        self.Q2 = nn.Sequential( nn.Linear(latent_dim+action_dim, 128),
+        self.Q2 = nn.Sequential( nn.Linear(latent_dim+action_dim, hidden_dim),
                             nn.ReLU(inplace=True),
-                            nn.Linear(128, 1))
+                            nn.Linear(hidden_dim, 1))
 
         self.apply(utils.weight_init)
 
@@ -61,14 +61,14 @@ class QNN(nn.Module):
         return torch.minimum(q1, q2)
 
 class EncoderNN(nn.Module):
-    def __init__(self, frame_cnt, img_sz, latent_dim, is_image, obs_dim):
+    def __init__(self, frame_cnt, img_sz, latent_dim, is_image, obs_dim, hidden_dim=128):
         super(EncoderNN, self).__init__()
 
         if(is_image is False):
             self.enc = nn.Sequential(
-                    nn.Linear(obs_dim, 128),
+                    nn.Linear(obs_dim, hidden_dim),
                     nn.ReLU(inplace=True),
-                    nn.Linear(128, latent_dim))
+                    nn.Linear(hidden_dim, latent_dim))
             return
         
         C = int(3*frame_cnt)
@@ -93,7 +93,7 @@ class EncoderNN(nn.Module):
         return x
     
 class DynamicsNN(nn.Module):
-    def __init__(self, latent_dim, action_dim):
+    def __init__(self, latent_dim, action_dim, hidden_dim=128):
         super(DynamicsNN, self).__init__()
 
         self.next_state = nn.Sequential(

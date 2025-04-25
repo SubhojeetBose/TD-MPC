@@ -231,7 +231,7 @@ class Workspace:
             # try to update the agent
             if not seed_until_step(self.global_step):
                 # Update
-                metrics = self.agent.update_model(self.replay_iter, self.global_step, self.cfg.target_update_freq, self.cfg.tau)
+                metrics = self.agent.update_model2(self.replay_iter, self.global_step, self.cfg.target_update_freq, self.cfg.tau)
                 self.logger.log_metrics(metrics, self.global_frame, ty="train")
 
             # take env step

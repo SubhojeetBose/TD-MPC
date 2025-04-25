@@ -10,14 +10,14 @@ import random
 class TOLD(nn.Module):
     def __init__(self, frame_cnt, img_sz, latent_dim, action_dim, is_image, obs_dim):
         super().__init__()
-        self._encoder = networks.EncoderNN(frame_cnt, img_sz, latent_dim, is_image, obs_dim)
+        # self._encoder = networks.EncoderNN(frame_cnt, img_sz, latent_dim, is_image, obs_dim)
         self._dynamics = networks.DynamicsNN(latent_dim, action_dim)
         self._reward = networks.RewardNN(latent_dim, action_dim)
         self._policy = networks.PolicyNN(latent_dim, action_dim)
         self._q = networks.QNN(latent_dim, action_dim)
     
     def encoder_states(self, obs):
-        return self._encoder(obs)
+        return obs # self._encoder(obs)
 
     def next_state_reward(self, latent_z, action):
         return self._dynamics(latent_z, action), self._reward(latent_z, action)
@@ -30,16 +30,19 @@ class TOLD(nn.Module):
 
 class Agent:
     def __init__(self, is_image, obs_dim, frame_cnt, img_sz, latent_dim, action_dim, lr, nums_samples = 500, num_pi_trajs = 50, num_horizon = 5, iterations = 10, rho = 0.5, consistency_coef = 2, reward_coef = 0.5, value_coef = 0.1):
-        self.device = torch.device('cuda')
-        self.model = TOLD(frame_cnt, img_sz, latent_dim, action_dim[0], is_image, obs_dim[0]).to(self.device)
+        self.device = torch.device('cpu')
+        self.obs_dim = obs_dim
+        self.model : TOLD = TOLD(frame_cnt, img_sz, obs_dim[0], action_dim[0], is_image, obs_dim[0]).to(self.device)
         self.model_target = deepcopy(self.model)
-        self.optim = torch.optim.Adam(self.model.parameters(), lr=lr)
+        self.q_optim = torch.optim.Adam(self.model._q.parameters(), lr=lr)
+        self.dyn_optim = torch.optim.Adam(self.model._dynamics.parameters(), lr=lr)
+        self.rew_optim = torch.optim.Adam(self.model._reward.parameters(), lr=lr)
         self.pi_optim = torch.optim.Adam(self.model._policy.parameters(), lr=lr)
-        self.aug = utils.RandomShiftsAug(img_sz/21)
+        # self.aug = utils.RandomShiftsAug(img_sz/21)
         self.model.eval()
         self.model_target.eval()
         self.action_dim = action_dim[0]
-        self.latent_dim = latent_dim
+        self.latent_dim = obs_dim[0]
         self.num_samples = nums_samples
         self.num_pi_trajs = num_pi_trajs
         self.horizon = num_horizon
@@ -69,11 +72,11 @@ class Agent:
 
     @torch.no_grad()
     def plan(self, step, obs, num_seed_step, isFirst = True, eval_mode = False):
-        # Use random actions for first 5000 steps
+        # Use random actions for first 500 steps
         if step < num_seed_step and not eval_mode:
             return torch.empty(self.action_dim, dtype=torch.float32, device=self.device).uniform_(-1, 1).cpu().numpy()
         
-        obs = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
+        obs = torch.tensor(obs, dtype=torch.float32, device=self.device).view(-1, self.latent)
         
         # sample for N_pi actions using current policy
         pi_actions = torch.empty(self.horizon, self.num_pi_trajs, self.action_dim, device=self.device)
@@ -118,7 +121,8 @@ class Agent:
         # if in eval mode we dont random sample else give the mean action
         if not eval_mode:
             a += std * torch.randn(self.action_dim, device=std.device)
-        
+
+
         return a.cpu().numpy()
     
     def update_pi(self, latent_zs):
@@ -126,9 +130,9 @@ class Agent:
 
 		# Loss is a weighted sum of Q-values
         pi_loss = 0
-        for t, latent_z in enumerate(latent_zs):
-            a = self.model.sample_action(latent_z)
-            Q = self.model.get_q(latent_z, a)
+        for t in range(1):
+            a = self.model.sample_action(latent_zs[:, t])
+            Q = self.model.get_q(latent_zs[:, t], a)
             pi_loss += -Q.mean() * (self.rho ** t)
 
         pi_loss.backward()
@@ -142,11 +146,69 @@ class Agent:
         
         return td_target
 
+    def update_model2(self, replay_buffer, step, target_update_freq, tau):
+        obs, action, reward, discount, next_obses = [x.float().to(self.device) for x in next(replay_buffer)]
+        
+        self.model.train()
+        self.model_target.eval()
+
+        obs = obs.view(-1, self.latent_dim)
+
+
+        # >>> Update Q
+        with torch.no_grad():
+            next_action = self.model.sample_action(obs)
+            target_Q = reward + discount * self.model_target.get_q(next_obses, next_action)
+
+        # TODO: Compute the Q value from the critic network
+        Q = self.model.get_q(obs, action)
+
+        # TODO: Compute the critic loss
+        critic_loss = F.mse_loss(Q, target_Q)
+
+        # TODO: Optimize the critic network
+        # critic gradient descent step
+        self.model.zero_grad()
+        critic_loss.backward()
+        self.q_optim.step()
+
+        # >>> Pi loss
+        latent_z = obs.view(-1, 1, self.latent_dim)
+        actor_loss = self.update_pi(latent_z)
+
+        # >>> World loss
+        latent_z = obs.detach().clone().view(-1, self.latent_dim)
+        pred_obs = self.model._dynamics(latent_z, action)
+        dyn_loss = F.mse_loss(pred_obs, next_obses)
+
+        self.dyn_optim.zero_grad()
+        dyn_loss.backward()
+        self.dyn_optim.step()
+        
+        # >>> reward model loss
+        latent_z = obs.detach().clone().view(-1, self.latent_dim)
+        pred_obs = self.model._reward(latent_z, action)
+        rew_loss = F.mse_loss(pred_obs, next_obses)
+
+        self.rew_optim.zero_grad()
+        rew_loss.backward()
+        self.rew_optim.step()
+        # <<<< 
+
+        if step % target_update_freq == 0:
+            self.soft_update(tau)
+
+        return {'critic_loss': float(critic_loss.item()),
+				'actor_loss': actor_loss,
+                'dynamics_loss': dyn_loss.item(),
+                'reward_loss': rew_loss.item() }
+
+
     def update_model(self, replay_buffer, step, target_update_freq, tau):
         obs, action, reward, discount, next_obses = [x.float().to(self.device) for x in next(replay_buffer)]
         start_idx = 0
 
-        self.optim.zero_grad()
+        self.q_optim.zero_grad()
         self.model.train()
 
         # get latent_z after running random augmentation
@@ -182,16 +244,14 @@ class Agent:
             
         total_loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), 10, error_if_nonfinite=False)
-        self.optim.step()
+        self.q_optim.step()
 
         # update the policy and target model
         pi_loss = self.update_pi(latent_zs)
 
         # do linear interpolation
         if step % target_update_freq == 0:
-            with torch.no_grad():
-                for p, p_target in zip(self.model.parameters(), self.model_target.parameters()):
-                    p_target.data.lerp_(p.data, tau)
+            self.soft_update(tau)
         
         self.model.eval()
 
@@ -201,6 +261,11 @@ class Agent:
 				'pi_loss': pi_loss,
 				'total_loss': float(total_loss.mean().item()),
 				'grad_norm': float(grad_norm)}
+
+    def soft_update(self, tau):
+        with torch.no_grad():
+            for p, p_target in zip(self.model.parameters(), self.model_target.parameters()):
+                p_target.data.lerp_(p.data, tau)
 
     def save_snapshot(self):
         keys_to_save = ["model", "model_target"]

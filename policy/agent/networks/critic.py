@@ -35,9 +35,9 @@ class SacCritic(nn.Module):
                                 nn.ReLU(inplace=True),
                                 nn.Linear(hidden_dim, 1))
 
-        self.Q2 = nn.Sequential(nn.Linear(repr_dim, hidden_dim),
-                                nn.ReLU(inplace=True),
-                                nn.Linear(hidden_dim, 1))
+        # self.Q2 = nn.Sequential(nn.Linear(repr_dim, hidden_dim),
+        #                         nn.ReLU(inplace=True),
+        #                         nn.Linear(hidden_dim, 1))
 
         self.apply(utils.weight_init)
 
@@ -46,6 +46,7 @@ class SacCritic(nn.Module):
         # Hint: Pass the state and action through the network and return the Q value
         input = torch.cat([obs, action], dim=1)
         q1 = self.Q1(input)
-        q2 = self.Q2(input)
+        # q2 = self.Q2(input)
         
-        return torch.minimum(q1, q2)
+        # return torch.minimum(q1, q2)
+        return q1
