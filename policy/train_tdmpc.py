@@ -88,7 +88,7 @@ class Workspace:
             self.cfg.replay_buffer_num_workers,
             self.cfg.suite.save_snapshot,
             self.cfg.nstep,
-            self.cfg.suite.discount,
+            1,
         )
 
         self._replay_iter = None
