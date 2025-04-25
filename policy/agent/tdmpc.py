@@ -128,7 +128,7 @@ class Agent:
         pi_loss = 0
         for t, latent_z in enumerate(latent_zs):
             a = self.model.sample_action(latent_z)
-            Q = torch.min(*self.model.get_q(latent_z, a))
+            Q = self.model.get_q(latent_z, a)
             pi_loss += -Q.mean() * (self.rho ** t)
 
         pi_loss.backward()
@@ -137,39 +137,43 @@ class Agent:
         return pi_loss.item()
 
     @torch.no_grad()
-    def get_td_target(self, next_obs, reward):
-        next_latent_z = self.model.encoder_states(next_obs)
-        td_target = reward + 0.99 * torch.min(*self.model_target.get_q(next_latent_z, self.model.sample_action(next_latent_z)))
+    def get_td_target(self, next_latent_z, reward):
+        td_target = reward + 0.99 * self.model_target.get_q(next_latent_z, self.model.sample_action(next_latent_z)).squeeze(1)
         
         return td_target
 
     def update_model(self, replay_buffer, step, target_update_freq, tau):
         obs, action, reward, discount, next_obses = [x.float().to(self.device) for x in next(replay_buffer)]
-        start_idx = random.randint(0, len(reward)-self.horizon)
+        start_idx = 0
 
         self.optim.zero_grad()
         self.model.train()
 
         # get latent_z after running random augmentation
-        latent_z = self.model.encoder_states(obs[start_idx])
+        total_obs = torch.cat((obs[:, start_idx].unsqueeze(1), next_obses[:, start_idx:start_idx+self.horizon]), dim = 1)
+        batch_size = total_obs.shape[0]
+        latent_nxt_zs = self.model.encoder_states(total_obs.reshape(-1, *total_obs.shape[-3:])).reshape(batch_size, self.horizon+1, -1)
+        # print(latent_nxt_zs.shape)
+        latent_z = latent_nxt_zs[:, 0].squeeze(1)
+        latent_nxt_zs = latent_nxt_zs[:, 1:]
         latent_zs = [latent_z.detach()]
 
         # calculating the loss
         consistency_loss, reward_loss, value_loss = 0, 0, 0
-        for t in range(start_idx, start_idx+self.horizon):
-            q_value = self.model.get_q(latent_z, action[t])
-            latent_z, reward_pred = self.model.next_state_reward(latent_z, action[t])
+        for t in range(self.horizon):
+            q_value = self.model.get_q(latent_z, action[:, t]).squeeze(1)
+            latent_z, reward_pred = self.model.next_state_reward(latent_z, action[:, t])
 
             with torch.no_grad():
-                next_obs = next_obses[t]
-                next_z_target = self.model_target.encoder_states(next_obs)
-                td_target = self.get_td_target(next_obs, reward[t])
+                next_z_target = latent_nxt_zs[:, t].squeeze(1)
+                # print(reward[:, t+start_idx].squeeze(1).shape)
+                td_target = self.get_td_target(next_z_target, reward[:, t+start_idx].squeeze(1))
             latent_zs.append(latent_z.detach())
 
             # losses
             rho = (self.rho ** t)
             consistency_loss += rho * torch.mean(F.mse_loss(latent_z, next_z_target), dim=-1, keepdim=True)
-            reward_loss += rho * F.mse_loss(reward_pred, reward[t])
+            reward_loss += rho * F.mse_loss(reward_pred.squeeze(1), reward[:, t+start_idx].squeeze(1))
             value_loss += rho * (F.mse_loss(q_value, td_target))
 
         total_loss = self.consistency_coef * consistency_loss.clamp(max=1e4) + \
@@ -202,13 +206,3 @@ class Agent:
         keys_to_save = ["model", "model_target"]
         payload = {k: self.__dict__[k].state_dict() for k in keys_to_save}
         return payload
-
-
-
-
-
-
-
-
-
-
