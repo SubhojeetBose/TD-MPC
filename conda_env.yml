@@ -6,7 +6,7 @@ channels:
   - conda-forge
   - nvidia
 dependencies:
-  - python=3.8
+  - python=3.9
   - pip>=23.0
   - numpy=1.24
   - pandas=2.0.3
