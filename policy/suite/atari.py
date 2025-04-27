@@ -33,7 +33,8 @@ class Pixels(gym.Wrapper):
         return self._get_obs(), reward, terminated, truncated, info
 
 def make(name, seed, num_frames, height, width, obs_type):
-    env = gym.make(name, render_mode="rgb_array")
+    env = gym.make(name, render_mode="rgb_array", continuous= True)
+    env = gym.wrappers.RescaleAction(env, -1, 1)
     if obs_type == 'pixels':
         env = Pixels(env, num_frames, height, width)
     return env

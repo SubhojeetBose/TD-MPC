@@ -140,13 +140,12 @@ class Agent:
         return pi_loss.item()
 
     @torch.no_grad()
-    def get_td_target(self, next_latent_z, reward):
-        td_target = reward + 0.99 * self.model_target.get_q(next_latent_z, self.model.sample_action(next_latent_z)).squeeze(1)
-        
+    def get_td_target(self, next_latent_z, reward, discount):
+        td_target = reward + discount * (self.model_target.get_q(next_latent_z, self.model.sample_action(next_latent_z)).squeeze(1))
         return td_target
 
     def update_model(self, replay_buffer, step, target_update_freq, tau):
-        obs, action, reward, discount, next_obses = [x.float().to(self.device) for x in next(replay_buffer)]
+        obs, action, reward, discount, next_obses = [x.float().to(self.device).unsqueeze(1) for x in next(replay_buffer)]
         start_idx = 0
 
         self.optim.zero_grad()
@@ -156,6 +155,7 @@ class Agent:
         total_obs = torch.cat((obs[:, start_idx].unsqueeze(1), next_obses[:, start_idx:start_idx+self.horizon]), dim = 1)
         batch_size = total_obs.shape[0]
         latent_nxt_zs = self.model.encoder_states(total_obs.reshape(-1, *total_obs.shape[-3:])).reshape(batch_size, self.horizon+1, -1)
+        latent_nxt_target_zs = self.model_target.encoder_states(total_obs.reshape(-1, *total_obs.shape[-3:])).reshape(batch_size, self.horizon+1, -1)
         # print(latent_nxt_zs.shape)
         latent_z = latent_nxt_zs[:, 0].squeeze(1)
         latent_nxt_zs = latent_nxt_zs[:, 1:]
@@ -168,9 +168,10 @@ class Agent:
             latent_z, reward_pred = self.model.next_state_reward(latent_z, action[:, t])
 
             with torch.no_grad():
-                next_z_target = latent_nxt_zs[:, t].squeeze(1)
+                next_z = latent_nxt_zs[:, t].squeeze(1)
+                next_z_target = latent_nxt_target_zs[:, t].squeeze(1)
                 # print(reward[:, t+start_idx].squeeze(1).shape)
-                td_target = self.get_td_target(next_z_target, reward[:, t+start_idx].squeeze(1))
+                td_target = self.get_td_target(next_z, reward[:, t+start_idx].squeeze(1), discount[:, t].squeeze(1))
             latent_zs.append(latent_z.detach())
 
             # losses
