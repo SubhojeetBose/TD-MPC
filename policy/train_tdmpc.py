@@ -228,7 +228,7 @@ class Workspace:
                 episode_reward = 0
 
             # try to evaluate
-            if eval_every_step(self.global_step):
+            if eval_every_step(self.global_step) and False:
                 self.logger.log(
                     "eval_total_time", self.timer.total_time(), self.global_frame
                 )

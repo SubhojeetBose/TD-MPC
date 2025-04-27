@@ -13,6 +13,8 @@ class RewardNN(nn.Module):
         self.reward = nn.Sequential(
                     nn.Linear(latent_dim+action_dim, 128), 
                     nn.ReLU(inplace=True),
+                    nn.Linear(128, 128), 
+                    nn.ReLU(inplace=True),
                     nn.Linear(128, 1))
 
     def forward(self, latent_z, action):
