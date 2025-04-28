@@ -32,9 +32,30 @@ class Pixels(gym.Wrapper):
         _, reward, terminated, truncated, info = self.env.step(action)
         return self._get_obs(), reward, terminated, truncated, info
 
+class NanCheckWrapper(gym.Wrapper):
+    def __init__(self, env):
+        super().__init__(env)
+
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        self._check_nan(obs)
+        return obs, info
+
+    def step(self, action):
+        if np.isnan(action).any():
+            raise ValueError("action nan")
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        self._check_nan(obs)
+        return obs, reward, terminated, truncated, info
+
+    def _check_nan(self, obs):
+        if np.isnan(obs).any():
+            raise ValueError("Environment returned observation with NaN values.")
+
 def make(name, seed, num_frames, height, width, obs_type):
-    env = gym.make(name, render_mode="rgb_array", continuous= True)
+    env = gym.make(name, render_mode="rgb_array", continuous=True)
     env = gym.wrappers.RescaleAction(env, -1, 1)
+    # env = NanCheckWrapper(env)
     if obs_type == 'pixels':
         env = Pixels(env, num_frames, height, width)
     return env

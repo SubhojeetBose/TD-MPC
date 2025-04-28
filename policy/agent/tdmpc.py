@@ -7,6 +7,28 @@ import numpy as np
 import torch.nn.functional as F
 import random 
 
+__REDUCE__ = lambda b: 'mean' if b else 'none'
+
+def l1(pred, target, reduce=False):
+    """Computes the L1-loss between predictions and targets."""
+    return F.l1_loss(pred, target, reduction=__REDUCE__(reduce))
+
+def mse(pred, target, reduce=False):
+    """Computes the MSE loss between predictions and targets."""
+    return F.mse_loss(pred, target, reduction=__REDUCE__(reduce))
+
+def orthogonal_init(m):
+    """Orthogonal layer initialization."""
+    if isinstance(m, nn.Linear):
+        nn.init.orthogonal_(m.weight.data)
+        if m.bias is not None:
+            nn.init.zeros_(m.bias)
+    elif isinstance(m, nn.Conv2d):
+        gain = nn.init.calculate_gain('relu')
+        nn.init.orthogonal_(m.weight.data, gain)
+        if m.bias is not None:
+            nn.init.zeros_(m.bias)
+
 class TOLD(nn.Module):
     def __init__(self, frame_cnt, img_sz, latent_dim, action_dim, is_image, obs_dim):
         super().__init__()
@@ -15,6 +37,10 @@ class TOLD(nn.Module):
         self._reward = networks.RewardNN(latent_dim, action_dim)
         self._policy = networks.PolicyNN(latent_dim, action_dim)
         self._q = networks.QNN(latent_dim, action_dim)
+        self.apply(orthogonal_init)
+        for m in [self._reward.reward, self._q.Q1]:
+            m[-1].weight.data.fill_(0)
+            m[-1].bias.data.fill_(0)
     
     def encoder_states(self, obs):
         return obs
@@ -29,18 +55,18 @@ class TOLD(nn.Module):
         return self._q(latent_z, action)
 
 class Agent:
-    def __init__(self, obs_type, obs_dim, frame_cnt, img_sz, latent_dim, action_dim, lr, nums_samples = 500, num_pi_trajs = 50, num_horizon = 5, iterations = 10, rho = 0.5, consistency_coef = 2, reward_coef = 0.5, value_coef = 0.1):
-        latent_dim = obs_dim[0]
-        self.device = torch.device('cpu')
+    def __init__(self, obs_type, obs_shape, frame_cnt, img_sz, latent_dim, action_dim, lr, nums_samples = 500, num_pi_trajs = 50, num_horizon = 5, iterations = 10, rho = 0.5, consistency_coef = 2, reward_coef = 0.5, value_coef = 0.1, device='cpu'):
+        latent_dim = obs_shape[0]
+        self.device = device
         is_image = obs_type == 'pixels'
-        self.model = TOLD(frame_cnt, img_sz, latent_dim, action_dim[0], is_image, obs_dim[0]).to(self.device)
+        self.model = TOLD(frame_cnt, img_sz, latent_dim, action_dim, is_image, obs_shape[0]).to(self.device)
         self.model_target = deepcopy(self.model)
         self.optim = torch.optim.Adam(self.model.parameters(), lr=lr)
         self.pi_optim = torch.optim.Adam(self.model._policy.parameters(), lr=lr)
         self.aug = utils.RandomShiftsAug(img_sz/21)
         self.model.eval()
         self.model_target.eval()
-        self.action_dim = action_dim[0]
+        self.action_dim = action_dim
         self.latent_dim = latent_dim
         self.num_samples = nums_samples
         self.num_pi_trajs = num_pi_trajs
@@ -51,6 +77,7 @@ class Agent:
         self.reward_coef = reward_coef
         self.value_coef = value_coef
         self._prev_mean = None
+        self.gamma = 0.99
         self.train()
 
     def train(self, training=True):
@@ -72,56 +99,54 @@ class Agent:
     @torch.no_grad()
     def plan(self, step, obs, num_seed_step, isFirst = True, eval_mode = False):
         # Use random actions for first 5000 steps
-        # if step < num_seed_step and not eval_mode:
-        #     return torch.empty(self.action_dim, dtype=torch.float32, device=self.device).uniform_(-1, 1).cpu().numpy()
+        if step < num_seed_step and not eval_mode:
+            return torch.empty(self.action_dim, dtype=torch.float32, device=self.device).uniform_(-1, 1).cpu().numpy()
         
         obs = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
         
         # sample for N_pi actions using current policy
-        # pi_actions = torch.empty(self.horizon, self.num_pi_trajs, self.action_dim, device=self.device)
-        # latent_z = self.model.encoder_states(obs).repeat(self.num_pi_trajs, 1)
-        # for t in range(self.horizon):
-        #     pi_actions[t] = self.model.sample_action(latent_z)
-        #     latent_z, _ = self.model.next_state_reward(latent_z, pi_actions[t])
+        pi_actions = torch.empty(self.horizon, self.num_pi_trajs, self.action_dim, device=self.device)
+        latent_z = self.model.encoder_states(obs).repeat(self.num_pi_trajs, 1)
+        for t in range(self.horizon):
+            pi_actions[t] = self.model.sample_action(latent_z)
+            latent_z, _ = self.model.next_state_reward(latent_z, pi_actions[t])
 
-        # # get the initial latent state and init mean and std for sampling N random shooting actions
-        # latent_z = self.model.encoder_states(obs).repeat(self.num_samples+self.num_pi_trajs, 1)
-        # mean = torch.zeros(self.horizon, self.action_dim, device=self.device)
-        # std = 2*torch.ones(self.horizon, self.action_dim, device=self.device)
-        # if not isFirst and self._prev_mean is not None:
-        #     mean[:-1] = self._prev_mean[1:]
+        # get the initial latent state and init mean and std for sampling N random shooting actions
+        latent_z = self.model.encoder_states(obs).repeat(self.num_samples+self.num_pi_trajs, 1)
+        mean = torch.zeros(self.horizon, self.action_dim, device=self.device)
+        std = 2*torch.ones(self.horizon, self.action_dim, device=self.device)
+        if not isFirst and self._prev_mean is not None:
+            mean[:-1] = self._prev_mean[1:]
 
-        # # random shooting
-        # for i in range(self.iterations):
-        #     actions = torch.clamp(mean.unsqueeze(1) + std.unsqueeze(1) * \
-		# 		torch.randn(self.horizon, self.num_samples, self.action_dim, device=std.device), -1, 1)
-        #     actions = torch.cat([actions, pi_actions], dim=1)
+        # random shooting
+        for i in range(self.iterations):
+            actions = torch.clamp(mean.unsqueeze(1) + std.unsqueeze(1) * \
+                torch.randn(self.horizon, self.num_samples, self.action_dim, device=std.device), -1, 1)
+            actions = torch.cat([actions, pi_actions], dim=1)
 
-        #     # get top k actions
-        #     value = self.estimate_value(latent_z, actions, self.horizon, 0.99).nan_to_num_(0)
-        #     top_idxs = torch.topk(value.squeeze(1), 64, dim=0).indices
-        #     top_value, top_actions = value[top_idxs], actions[:, top_idxs]
+            # get top k actions
+            value = self.estimate_value(latent_z, actions, self.horizon, 0.99).nan_to_num_(0)
+            top_idxs = torch.topk(value.squeeze(1), 64, dim=0).indices
+            top_value, top_actions = value[top_idxs], actions[:, top_idxs]
 
-        #     # get next mean and std deviation
-        #     max_value = top_value.max(0)[0]
-        #     score = torch.exp((top_value - max_value))
-        #     score /= score.sum(0)
-        #     next_mean = torch.sum(score.unsqueeze(0) * top_actions, dim=1) / (score.sum(0) + 1e-9)
-        #     next_std = torch.sqrt(torch.sum(score.unsqueeze(0) * (top_actions - next_mean.unsqueeze(1)) ** 2, dim=1) / (score.sum(0) + 1e-9))
-        #     next_std = next_std.clamp_(1e-3, 2)
-        #     mean, std = next_mean, next_std
+            # get next mean and std deviation
+            max_value = top_value.max(0)[0]
+            score = torch.exp((top_value - max_value))
+            score /= score.sum(0)
+            next_mean = torch.sum(score.unsqueeze(0) * top_actions, dim=1) / (score.sum(0) + 1e-9)
+            next_std = torch.sqrt(torch.sum(score.unsqueeze(0) * (top_actions - next_mean.unsqueeze(1)) ** 2, dim=1) / (score.sum(0) + 1e-9))
+            next_std = next_std.clamp_(1e-3, 2)
+            mean, std = next_mean, next_std
 
-        # # get the action based on Jth mean and std
-        # score = score.squeeze(1).cpu().numpy()
-        # actions = top_actions[:, np.random.choice(np.arange(score.shape[0]), p=score)]
-        # self._prev_mean = mean
-        # mean, std = actions[0], next_std[0]
-        # a = mean
-        # # if in eval mode we dont random sample else give the mean action
-        # if not eval_mode:
-        #     a += std * torch.randn(self.action_dim, device=std.device)
-        
-        a = self.model.sample_action(obs)[0]
+        # get the action based on Jth mean and std
+        score = score.squeeze(1).cpu().numpy()
+        actions = top_actions[:, np.random.choice(np.arange(score.shape[0]), p=score)]
+        self._prev_mean = mean
+        mean, std = actions[0], next_std[0]
+        a = mean
+        # if in eval mode we dont random sample else give the mean action
+        if not eval_mode:
+            a += std * torch.randn(self.action_dim, device=std.device)
 
         # if step%100 == 0 and not eval_mode:
         #     print(a)
@@ -130,7 +155,7 @@ class Agent:
     def update_pi(self, latent_zs):
         self.pi_optim.zero_grad()
 
-		# Loss is a weighted sum of Q-values
+        # Loss is a weighted sum of Q-values
         pi_loss = 0
         for t, latent_z in enumerate(latent_zs):
             a = self.model.sample_action(latent_z)
@@ -148,7 +173,9 @@ class Agent:
         return td_target
 
     def update_model(self, replay_buffer, step, target_update_freq, tau):
-        obs, action, reward, discount, next_obses, step_reward = [x.float().to(self.device).unsqueeze(1) for x in next(replay_buffer)]
+        # tmp = [x.float().to(self.device).unsqueeze(1) for x in replay_buffer.sample()]
+        tmp = replay_buffer.sample()
+        obs, next_obses, action, reward, idxs, weights = tmp
         start_idx = 0
 
         self.optim.zero_grad()
@@ -166,7 +193,7 @@ class Agent:
         latent_zs = [latent_z.detach()]
 
         # calculating the loss
-        consistency_loss, reward_loss, value_loss = 0, 0, 0
+        consistency_loss, reward_loss, value_loss, priority_loss = 0, 0, 0, 0
         for t in range(self.horizon):
             q_value = self.model.get_q(latent_z, action[:, t]).squeeze(1)
             latent_z, reward_pred = self.model.next_state_reward(latent_z, action[:, t])
@@ -175,22 +202,29 @@ class Agent:
                 next_z = latent_nxt_zs[:, t].squeeze(1)
                 next_z_target = latent_nxt_target_zs[:, t].squeeze(1)
                 # print(reward[:, t+start_idx].squeeze(1).shape)
-                td_target = self.get_td_target(next_z, reward[:, t+start_idx].squeeze(1), discount[:, t].squeeze(1))
+                td_target = self.get_td_target(next_z, reward[:, t+start_idx].squeeze(1), self.gamma)
             latent_zs.append(latent_z.detach())
 
             # losses
             rho = (self.rho ** t)
-            consistency_loss += rho * torch.mean(F.mse_loss(latent_z, next_z_target), dim=-1, keepdim=True)
-            reward_loss += rho * F.mse_loss(reward_pred.squeeze(1), step_reward[:, t+start_idx].squeeze(1))
-            value_loss += rho * (F.mse_loss(q_value, td_target))
-
-        total_loss = self.consistency_coef * consistency_loss.clamp(max=1e4) + \
-					 self.reward_coef * reward_loss.clamp(max=1e4) + \
-					 self.value_coef * value_loss.clamp(max=1e4)
+            consistency_loss += rho * torch.mean(mse(latent_z, next_z_target), dim=-1)
+            reward_loss += rho * mse(reward_pred.squeeze(1), reward[:, t+start_idx].squeeze(1))
+            value_loss += rho * (mse(q_value, td_target))
+            priority_loss += rho * l1(q_value, td_target)
             
-        total_loss.backward()
-        grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), 10, error_if_nonfinite=False)
+        total_loss = self.consistency_coef * consistency_loss.clamp(max=1e4) + \
+                     self.reward_coef * reward_loss.clamp(max=1e4) + \
+                     self.value_coef * value_loss.clamp(max=1e4)
+        
+        weighted_loss = (total_loss * weights).mean()
+        weighted_loss.register_hook(lambda grad: grad * (1/self.horizon))
+        weighted_loss.backward()
+        # TODO: add to cfg
+        grad_clip_norm = 10
+        grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), grad_clip_norm, error_if_nonfinite=False)
         self.optim.step()
+        replay_buffer.update_priorities(idxs, priority_loss.clamp(max=1e4).detach().unsqueeze(1))
+
 
         # update the policy and target model
         pi_loss = self.update_pi(latent_zs)
@@ -204,11 +238,11 @@ class Agent:
         self.model.eval()
 
         return {'consistency_loss': float(consistency_loss.mean().item()),
-				'reward_loss': float(reward_loss.mean().item()),
-				'value_loss': float(value_loss.mean().item()),
-				'pi_loss': pi_loss,
-				'total_loss': float(total_loss.mean().item()),
-				'grad_norm': float(grad_norm)}
+                'reward_loss': float(reward_loss.mean().item()),
+                'value_loss': float(value_loss.mean().item()),
+                'pi_loss': pi_loss,
+                'total_loss': float(total_loss.mean().item()),
+                'grad_norm': float(grad_norm)}
 
     def save_snapshot(self):
         keys_to_save = ["model", "model_target"]

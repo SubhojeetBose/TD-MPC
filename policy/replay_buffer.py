@@ -30,225 +30,123 @@ def load_episode(fn):
         episode = {k: episode[k] for k in episode.keys()}
         return episode
 
-
-class ReplayBufferStorage:
-    def __init__(self, data_specs, replay_dir):
-        self._data_specs = data_specs
-        self._replay_dir = replay_dir
-        replay_dir.mkdir(exist_ok=True)
-        self._current_episode = defaultdict(list)
-        self._preload()
-
+class Episode(object):
+    """Storage object for a single episode."""
+    def __init__(self, cfg, init_obs):
+        self.cfg = cfg
+        self.device = torch.device(cfg.device)
+        dtype = torch.float32 if cfg.obs_type == 'features' else torch.uint8
+        self.obs = torch.zeros((cfg.episode_length+1, *init_obs.shape), dtype=dtype, device=self.device)
+        self.obs[0] = torch.tensor(init_obs, dtype=dtype, device=self.device)
+        self.action = torch.zeros((cfg.episode_length, cfg.agent.action_dim), dtype=torch.float32, device=self.device)
+        self.reward = torch.zeros((cfg.episode_length,), dtype=torch.float32, device=self.device)
+        self.cumulative_reward = 0
+        self.done = False
+        self._idx = 0
+    
     def __len__(self):
-        return self._num_transitions
+        return self._idx
 
-    def add(self, time_step):
-        for spec in self._data_specs:
-            value = time_step[spec.name]
-            if np.isscalar(value):
-                value = np.full(spec.shape, value, spec.dtype)
-            assert spec.shape == value.shape and spec.dtype == value.dtype
-            self._current_episode[spec.name].append(value)
-        if time_step.last():
-            episode = dict()
-            for spec in self._data_specs:
-                value = self._current_episode[spec.name]
-                episode[spec.name] = np.array(value, spec.dtype)
-            self._current_episode = defaultdict(list)
-            self._store_episode(episode)
+    @property
+    def first(self):
+        return len(self) == 0
+    
+    def __add__(self, transition):
+        self.add(*transition)
+        return self
 
-    def _preload(self):
-        self._num_episodes = 0
-        self._num_transitions = 0
-        for fn in self._replay_dir.glob("*.npz"):
-            _, _, eps_len = fn.stem.split("_")
-            self._num_episodes += 1
-            self._num_transitions += int(eps_len)
-
-    def _store_episode(self, episode):
-        eps_idx = self._num_episodes
-        eps_len = episode_len(episode)
-        self._num_episodes += 1
-        self._num_transitions += eps_len
-        ts = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
-        eps_fn = f"{ts}_{eps_idx}_{eps_len}.npz"
-        save_episode(episode, self._replay_dir / eps_fn)
+    def add(self, obs, action, reward, done):
+        self.obs[self._idx+1] = torch.tensor(obs, dtype=self.obs.dtype, device=self.obs.device)
+        self.action[self._idx] = torch.tensor(action, dtype=self.action.dtype, device=self.action.device)
+        self.reward[self._idx] = reward
+        self.cumulative_reward += reward
+        self.done = done
+        self._idx += 1
 
 
-class ReplayBuffer(IterableDataset):
-    def __init__(
-        self,
-        replay_dir,
-        max_size,
-        num_workers,
-        nstep,
-        discount,
-        fetch_every,
-        save_snapshot,
-    ):
-        self._replay_dir = replay_dir
-        self._size = 0
-        self._max_size = max_size
-        self._num_workers = max(1, num_workers)
-        self._episode_fns = []
-        self._episodes = dict()
-        self._nstep = nstep
-        self._discount = discount
-        self._fetch_every = fetch_every
-        self._samples_since_last_fetch = fetch_every
-        self._save_snapshot = save_snapshot
+class ReplayBuffer():
+    """
+    Storage and sampling functionality for training TD-MPC / TOLD.
+    The replay buffer is stored in GPU memory when training from state.
+    Uses prioritized experience replay by default."""
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.device = torch.device(cfg.device)
+        dtype = torch.float32 if cfg.obs_type == 'features' else torch.uint8
+        self.capacity = cfg.replay_buffer_size
+        obs_shape = cfg.agent.obs_shape
+        self._obs = torch.empty((self.capacity+1, *obs_shape), dtype=dtype, device=self.device)
+        self._last_obs = torch.empty((self.capacity//cfg.episode_length, *cfg.agent.obs_shape), dtype=dtype, device=self.device)
+        self._action = torch.empty((self.capacity, cfg.agent.action_dim), dtype=torch.float32, device=self.device)
+        self._reward = torch.empty((self.capacity,), dtype=torch.float32, device=self.device)
+        self._priorities = torch.ones((self.capacity,), dtype=torch.float32, device=self.device)
+        self._eps = 1e-6
+        self._full = False
+        self.idx = 0
 
-    def _sample_episode(self):
-        eps_fn = random.choice(self._episode_fns)
-        return self._episodes[eps_fn]
+    def __add__(self, episode: Episode):
+        self.add(episode)
+        return self
 
-    def _store_episode(self, eps_fn):
-        try:
-            episode = load_episode(eps_fn)
-        except:
-            return False
-        eps_len = episode_len(episode)
-        while eps_len + self._size > self._max_size:
-            early_eps_fn = self._episode_fns.pop(0)
-            early_eps = self._episodes.pop(early_eps_fn)
-            self._size -= episode_len(early_eps)
-            early_eps_fn.unlink(missing_ok=True)
-        self._episode_fns.append(eps_fn)
-        self._episode_fns.sort()
-        self._episodes[eps_fn] = episode
-        self._size += eps_len
+    def add(self, episode: Episode):
+        self._obs[self.idx:self.idx+self.cfg.episode_length] = episode.obs[:-1] if self.cfg.obs_type == 'features' else episode.obs[:-1, -3:]
+        self._last_obs[self.idx//self.cfg.episode_length] = episode.obs[-1]
+        self._action[self.idx:self.idx+self.cfg.episode_length] = episode.action
+        self._reward[self.idx:self.idx+self.cfg.episode_length] = episode.reward
+        if self._full:
+            max_priority = self._priorities.max().to(self.device).item()
+        else:
+            max_priority = 1. if self.idx == 0 else self._priorities[:self.idx].max().to(self.device).item()
+        mask = torch.arange(self.cfg.episode_length) >= self.cfg.episode_length-self.cfg.agent.num_horizon
+        new_priorities = torch.full((self.cfg.episode_length,), max_priority, device=self.device)
+        new_priorities[mask] = 0
+        self._priorities[self.idx:self.idx+self.cfg.episode_length] = new_priorities
+        self.idx = (self.idx + self.cfg.episode_length) % self.capacity
+        self._full = self._full or self.idx == 0
 
-        if not self._save_snapshot:
-            eps_fn.unlink(missing_ok=True)
-        return True
+    def update_priorities(self, idxs, priorities):
+        self._priorities[idxs] = priorities.squeeze(1).to(self.device) + self._eps
 
-    def _try_fetch(self):
-        if self._samples_since_last_fetch < self._fetch_every:
-            return
-        self._samples_since_last_fetch = 0
-        try:
-            worker_id = torch.utils.data.get_worker_info().id
-        except:
-            worker_id = 0
-        eps_fns = sorted(self._replay_dir.glob("*.npz"), reverse=True)
-        fetched_size = 0
-        for eps_fn in eps_fns:
-            eps_idx, eps_len = [int(x) for x in eps_fn.stem.split("_")[1:]]
-            if eps_idx % self._num_workers != worker_id:
-                continue
-            if eps_fn in self._episodes.keys():
-                break
-            if fetched_size + eps_len > self._max_size:
-                break
-            fetched_size += eps_len
-            if not self._store_episode(eps_fn):
-                break
+    def _get_obs(self, arr, idxs):
+        if self.cfg.obs_type == 'features':
+            return arr[idxs]
+        obs = torch.empty((self.cfg.batch_size, 3*self.cfg.agent.frame_stack, *arr.shape[-2:]), dtype=arr.dtype, device=torch.device('cuda'))
+        obs[:, -3:] = arr[idxs].to(self.cfg.device)
+        _idxs = idxs.clone()
+        mask = torch.ones_like(_idxs, dtype=torch.bool)
+        for i in range(1, self.cfg.agent.frame_stack):
+            mask[_idxs % self.cfg.episode_length == 0] = False
+            _idxs[mask] -= 1
+            obs[:, -(i+1)*3:-i*3] = arr[_idxs].to(self.cfg.device)
+        return obs.float()
 
-    def _sample(self):
-        try:
-            self._try_fetch()
-        except:
-            traceback.print_exc()
-        self._samples_since_last_fetch += 1
-        episode = self._sample_episode()
+    def sample(self):
+        probs = (self._priorities if self._full else self._priorities[:self.idx]) ** self.cfg.per_alpha
+        probs /= probs.sum()
+        total = len(probs)
+        idxs = torch.from_numpy(np.random.choice(total, self.cfg.batch_size, p=probs.cpu().numpy(), replace=not self._full)).to(self.device)
+        weights = (total * probs[idxs]) ** (-self.cfg.per_beta)
+        weights /= weights.max()
 
-        # add +1 for the first dummy transition
-        idx = np.random.randint(0, episode_len(episode) - self._nstep + 1) + 1
-        obs = episode["observation"][idx - 1]
-        action = episode["action"][idx]
-        next_obs = episode["observation"][idx + self._nstep - 1]
-        reward = np.zeros_like(episode["reward"][idx])
-        step_reward_0 = episode["reward"][idx]
-        discount = np.ones_like(episode["discount"][idx])
-        for i in range(self._nstep):
-            step_reward = episode["reward"][idx + i]
-            reward += discount * step_reward
-            discount *= episode["discount"][idx + i] * self._discount
+        obs = self._get_obs(self._obs, idxs)
+        next_obs_shape = self._last_obs.shape[1:] if self.cfg.obs_type == 'features' else (3*self.cfg.agent.frame_stack, *self._last_obs.shape[-2:])
+        next_obs = torch.empty((self.cfg.agent.num_horizon+1, self.cfg.batch_size, *next_obs_shape), dtype=obs.dtype, device=obs.device)
+        action = torch.empty((self.cfg.agent.num_horizon+1, self.cfg.batch_size, *self._action.shape[1:]), dtype=torch.float32, device=self.device)
+        reward = torch.empty((self.cfg.agent.num_horizon+1, self.cfg.batch_size), dtype=torch.float32, device=self.device)
+        for t in range(self.cfg.agent.num_horizon+1):
+            _idxs = idxs + t
+            next_obs[t] = self._get_obs(self._obs, _idxs+1)
+            action[t] = self._action[_idxs]
+            reward[t] = self._reward[_idxs]
 
-        return (obs, action, reward, discount, next_obs, step_reward_0)
+        mask = (_idxs+1) % self.cfg.episode_length == 0
+        next_obs[-1, mask] = self._last_obs[_idxs[mask]//self.cfg.episode_length].to(self.cfg.device).float()
+        if not action.is_cuda:
+            action, reward, idxs, weights = \
+                action.to(self.cfg.device), reward.to(self.cfg.device), idxs.to(self.cfg.device), weights.to(self.cfg.device)
 
-    def __iter__(self):
-        while True:
-            yield self._sample()
-
-
-class ExpertReplayBuffer(IterableDataset):
-    def __init__(self, dataset_path, num_demos, obs_type):
-
-        with open(dataset_path, "rb") as f:
-            data = pickle.load(f)
-            obses = data[1]
-            actions = data[2]
-
-        self._episodes = []
-        for i in range(num_demos):
-            episode = dict(observation=obses[i], action=actions[i])
-            self._episodes.append(episode)
-
-    def _sample_episode(self):
-        episode = random.choice(self._episodes)
-        return episode
-
-    def _sample(self):
-        episode = self._sample_episode()
-        observation = episode["observation"]
-        action = episode["action"]
-
-        idx = np.random.randint(0, len(observation))
-        observation = observation[idx]
-        action = action[idx]
-
-        return (observation, action)
-
-    def __iter__(self):
-        while True:
-            yield self._sample()
-
-
-def _worker_init_fn(worker_id):
-    np.random.seed(worker_id)
-    random.seed(worker_id)
-
-
-def make_replay_loader(
-    replay_dir,
-    max_size,
-    batch_size,
-    num_workers,
-    save_snapshot,
-    nstep,
-    discount,
-):
-    max_size_per_worker = max_size // max(1, num_workers)
-
-    iterable = ReplayBuffer(
-        replay_dir,
-        max_size_per_worker,
-        num_workers,
-        nstep,
-        discount,
-        fetch_every=1000,
-        save_snapshot=save_snapshot,
-    )
-
-    loader = torch.utils.data.DataLoader(
-        iterable,
-        batch_size=batch_size,
-        num_workers=num_workers,
-        pin_memory=True,
-        worker_init_fn=_worker_init_fn,
-    )
-    return loader
-
-
-def make_expert_replay_loader(replay_dir, batch_size, num_demos, obs_type):
-    iterable = ExpertReplayBuffer(replay_dir, num_demos, obs_type)
-
-    loader = torch.utils.data.DataLoader(
-        iterable,
-        batch_size=batch_size,
-        num_workers=2,
-        pin_memory=True,
-        worker_init_fn=_worker_init_fn,
-    )
-    return loader
+        obs = obs.unsqueeze(1)
+        next_obs = next_obs.swapaxes(0, 1)
+        action = action.swapaxes(0, 1)
+        reward = reward.swapaxes(0, 1)
+        return obs, next_obs, action, reward.unsqueeze(2), idxs, weights

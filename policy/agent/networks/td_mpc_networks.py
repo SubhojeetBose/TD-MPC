@@ -49,18 +49,19 @@ class QNN(nn.Module):
                             nn.ReLU(inplace=True),
                             nn.Linear(128, 1))
 
-        self.Q2 = nn.Sequential( nn.Linear(latent_dim+action_dim, 128),
-                            nn.ReLU(inplace=True),
-                            nn.Linear(128, 1))
+        # self.Q2 = nn.Sequential( nn.Linear(latent_dim+action_dim, 128),
+        #                     nn.ReLU(inplace=True),
+        #                     nn.Linear(128, 1))
 
         self.apply(utils.weight_init)
 
     def forward(self, latent_z, action):
-        input = torch.cat([latent_z, action], dim=-1)
-        q1 = self.Q1(input)
-        q2 = self.Q2(input)
+        inp = torch.cat([latent_z, action], dim=-1)
+        q1 = self.Q1(inp)
+        # q2 = self.Q2(input)
         
-        return torch.minimum(q1, q2)
+        # return torch.minimum(q1, q2)
+        return q1
 
 class EncoderNN(nn.Module):
     def __init__(self, frame_cnt, img_sz, latent_dim, is_image, obs_dim):
