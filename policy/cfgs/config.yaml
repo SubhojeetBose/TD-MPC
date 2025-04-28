@@ -8,13 +8,13 @@ defaults:
 replay_buffer_size: 150000
 replay_buffer_num_workers: 2
 nstep: 10
-batch_size: 32
+batch_size: 2048
 episode_length: ???
 per_beta: 0.4 # from tdmpc
 per_alpha: 0.6 # from tdmpc
 # misc
 seed: 0
-device: cpu
+device: cuda
 save_video: true
 save_train_video: false
 use_tb: true
