@@ -26,6 +26,11 @@ obs_type: 'features'
 reward_type: 'dense' # dense, sparse
 experiment: rl
 frame_count: 3
+exp_id: 'change_this'
+
+# snapshot
+save_snapshot: true
+snapshot_interval: 300 # seconds (5mins)
 
 # expert dataset
 num_demos: 100
@@ -33,5 +38,5 @@ expert_dataset: /Users/subhojeetbose/Downloads/assignment 3/bc.pkl
 
 hydra:
   run:
-    dir: ./exp_local/${now:%Y.%m.%d}_${experiment}/${now:%H%M%S}
+    dir: ./exp_local/${exp_id}
 

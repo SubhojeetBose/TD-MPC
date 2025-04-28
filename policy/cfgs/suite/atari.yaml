@@ -16,15 +16,12 @@ height: 64
 width: 64
 
 # train settings
-num_train_frames: 50000
+num_train_frames: 2000000
 num_seed_frames: 8000
 
 # eval
 eval_every_frames: 2000
 num_eval_episodes: 10
-
-# snapshot
-save_snapshot: false
 
 task_make_fn:
   _target_: suite.atari.make

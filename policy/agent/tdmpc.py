@@ -248,6 +248,11 @@ class Agent:
         keys_to_save = ["model", "model_target"]
         payload = {k: self.__dict__[k].state_dict() for k in keys_to_save}
         return payload
+    
+    def load_snapshot(self, payload):
+        keys_to_save = ["model", "model_target"]
+        for k in keys_to_save:
+            self.__dict__[k].load_state_dict(payload[k])
 
 
 

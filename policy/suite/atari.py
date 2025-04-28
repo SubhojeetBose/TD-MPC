@@ -53,7 +53,7 @@ class NanCheckWrapper(gym.Wrapper):
             raise ValueError("Environment returned observation with NaN values.")
 
 def make(name, seed, num_frames, height, width, obs_type):
-    env = gym.make(name, render_mode="rgb_array", continuous=True)
+    env = gym.make(name, render_mode="rgb_array")
     env = gym.wrappers.RescaleAction(env, -1, 1)
     # env = NanCheckWrapper(env)
     if obs_type == 'pixels':

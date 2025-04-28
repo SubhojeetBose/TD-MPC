@@ -22,6 +22,8 @@ from video import TrainVideoRecorder, VideoRecorder
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 torch.backends.cudnn.benchmark = True
+import time
+import checkpoint
 
 def make_agent(cfg):
     return hydra.utils.instantiate(cfg.agent)
@@ -124,6 +126,7 @@ class Workspace:
         )
 
         episode_step, episode_reward = 0, 0
+        next_snapshot_time = time.time() + self.cfg.snapshot_interval
 
         obs, _ = self.train_env.reset()
         done = False
@@ -131,7 +134,12 @@ class Workspace:
         episode = Episode(self.cfg, obs)
 
         # self.train_video_recorder.init(time_step.observation[self.cfg.obs_type])
-        metrics = None
+        metrics = {'consistency_loss': 0,
+                'reward_loss': 0,
+                'value_loss': 0,
+                'pi_loss': 0,
+                'total_loss': 0,
+                'grad_norm': 0}
         is_start = True
         while train_until_step(self.global_step):
             if done:
@@ -144,20 +152,20 @@ class Workspace:
 
                 self.replay_buffer += episode
 
-                if metrics is not None:
-                    # log stats
-                    elapsed_time, total_time = self.timer.reset()
-                    episode_frame = episode_step * self.cfg.suite.action_repeat
-                    with self.logger.log_and_dump_ctx(
-                        self.global_frame, ty="train"
-                    ) as log:
-                        log("fps", episode_frame / elapsed_time)
-                        log("total_time", total_time)
-                        log("episode_reward", episode_reward)
-                        log("episode_length", episode_frame)
-                        log("episode", self.global_episode)
-                        log("buffer_size", self.replay_buffer.capacity)
-                        log("step", self.global_step)
+                # if metrics is not None:
+                #     # log stats
+                #     elapsed_time, total_time = self.timer.reset()
+                #     episode_frame = episode_step * self.cfg.suite.action_repeat
+                #     with self.logger.log_and_dump_ctx(
+                #         self.global_frame, ty="train"
+                #     ) as log:
+                #         log("fps", episode_frame / elapsed_time)
+                #         log("total_time", total_time)
+                #         log("episode_reward", episode_reward)
+                #         log("episode_length", episode_frame)
+                #         log("episode", self.global_episode)
+                #         log("buffer_size", self.replay_buffer.capacity)
+                #         log("step", self.global_step)
 
                 # reset env
                 obs, _ = self.train_env.reset()
@@ -167,57 +175,87 @@ class Workspace:
 
                 # self.train_video_recorder.init(time_step.observation[self.cfg.obs_type])
                 # try to save snapshot
-                if self.cfg.suite.save_snapshot:
+                if self.cfg.save_snapshot and time.time() > next_snapshot_time:
+                    next_snapshot_time = time.time() + self.cfg.snapshot_interval
                     self.save_snapshot()
                 episode_step = 0
                 episode_reward = 0
 
             # try to evaluate
-            if eval_every_step(self.global_step):
-                self.logger.log(
-                    "eval_total_time", self.timer.total_time(), self.global_frame
-                )
-                self.eval()
+            # if eval_every_step(self.global_step):
+            #     self.logger.log(
+            #         "eval_total_time", self.timer.total_time(), self.global_frame
+            #     )
+            #     self.eval()
 
             # sample action
-            with torch.no_grad(), utils.eval_mode(self.agent):
-                action = self.agent.plan(self.global_step,
-                        obs,
-                        self.cfg.suite.num_seed_frames,
-                        is_start,
-                        eval_mode=False,
-                    )
-
+            # with torch.no_grad(), utils.eval_mode(self.agent):
+                # action = self.agent.plan(self.global_step,
+                #         obs,
+                #         self.cfg.suite.num_seed_frames,
+                #         is_start,
+                #         eval_mode=False,
+                #     )
+            action = self.train_env.action_space.sample()
             # try to update the agent
-            if not seed_until_step(self.global_step):
-                # Update
-                metrics = self.agent.update_model(self.replay_buffer, self.global_step, self.cfg.target_update_freq, self.cfg.tau)
-                self.logger.log_metrics(metrics, self.global_frame, ty="train")
+            # if not seed_until_step(self.global_step):
+            #     # Update
+            #     metrics = self.agent.update_model(self.replay_buffer, self.global_step, self.cfg.target_update_freq, self.cfg.tau)
+            # self.logger.log_metrics(metrics, self.global_frame, ty="train")
 
             # take env step
             obs, rew, terminated, truncated, _ = self.train_env.step(action)
             done = terminated or truncated
-            episode += (obs, action, rew, done) # store in episode later in replay buffer
+            # episode += (obs, action, rew, done) # store in episode later in replay buffer
+            rvals = np.random.rand(3)
+            episode += (rvals[0], rvals[1], rvals[2], False)
             episode_reward += rew
 
             # self.train_video_recorder.record(time_step.observation[self.cfg.obs_type])
             episode_step += 1
             self._global_step += 1
             is_start = 0
+        print(self._global_episode, self.global_step)
 
     def save_snapshot(self):
-        snapshot = self.work_dir / "snapshot.pt"
-        keys_to_save = ["timer", "_global_step", "_global_episode"]
-        payload = {k: self.__dict__[k] for k in keys_to_save}
-        payload.update(self.agent.save_snapshot())
-        with snapshot.open("wb") as f:
-            torch.save(payload, f)
+        snapshot = self.snapshot_path
+        payload = {k: self.__dict__[k] for k in self.keys_to_save}
+        payload['agent'] = self.agent.save_snapshot()
+        payload['buffer'] = self.replay_buffer.save_snapshot()
+        torch.save(payload, snapshot)
+        new_file, chksm = checkpoint.save_checkpoint(snapshot)
+        print(f"saved snapshot for step {self.global_step} in {new_file}[{chksm}]")
+    
+    @property
+    def snapshot_path(self):
+        return Path.cwd() / "snapshot.pt"
+
+    @property
+    def keys_to_save(self):
+        return ["timer", "_global_step", "_global_episode"]
+
+    def load_snapshot(self):
+        snapshot = self.snapshot_path
+        snapshot = checkpoint.get_checkpoint(snapshot)
+        print("load snapshot path", snapshot)
+        if snapshot is None or not os.path.isfile(snapshot):
+            print("WARNING: snapshot not found")
+            return
+        payload = torch.load(snapshot, weights_only=False)
+        for k in self.keys_to_save:
+            self.__dict__[k] = payload[k]
+        self.agent.load_snapshot(payload['agent'])
+        self.replay_buffer.load_snapshot(payload['buffer'])
+        print(f"Loaded snapshot with globalstep {self.global_step}")
+
 
 @hydra.main(config_path="cfgs", config_name="config")
 def main(cfg):
     from train_tdmpc import Workspace as W
 
     workspace = W(cfg)
+    if cfg.save_snapshot:
+        workspace.load_snapshot()
     workspace.train()
 
 

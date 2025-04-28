@@ -150,3 +150,14 @@ class ReplayBuffer():
         action = action.swapaxes(0, 1)
         reward = reward.swapaxes(0, 1)
         return obs, next_obs, action, reward.unsqueeze(2), idxs, weights
+    
+    @property
+    def keys_to_save(self):
+        return [ "_obs", "_last_obs", "_action", "_reward", "_priorities", "_eps", "_full", "idx" ]
+
+    def save_snapshot(self):
+        return { k: self.__dict__[k] for k in self.keys_to_save }
+
+    def load_snapshot(self, payload):
+        for k in self.keys_to_save:
+            self.__dict__[k] = payload[k]
