@@ -31,6 +31,11 @@ exp_id: 'change_this'
 # snapshot
 save_snapshot: true
 snapshot_interval: 300 # seconds (5mins)
+num_snapshots: 5
+# checkpoints
+save_checkpoint: true
+checkpoint_every: 100000 # steps
+load_checkpoint_path: null
 
 # expert dataset
 num_demos: 100

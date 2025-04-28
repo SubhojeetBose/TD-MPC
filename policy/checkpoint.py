@@ -4,8 +4,12 @@ from datetime import datetime
 from pathlib import Path
 
 ALGO = 'sha256'
-NUM_BACKUP = 5
 LOG_FILE = "checksums.log"
+
+def get_logfile_path(file_path):
+    storage_dir = file_path.parent
+    log_file = storage_dir / f"{file_path.stem}_checksums.log"
+    return log_file
 
 def compute_checksum(file_path):
     """Compute checksum of a file."""
@@ -20,11 +24,11 @@ def print_log(log_file_path):
     with open(log_file_path, 'r') as log:
         print(log.read())
 
-def save_checkpoint(file_path):
+def save_checkpoint(file_path, num_backup=-1):
     """Save file into storage with timestamp and log checksum."""
     file_path = Path(file_path)
     storage_dir = file_path.parent
-    log_file = storage_dir / "checksums.log"
+    log_file = get_logfile_path(file_path)
 
     # Ensure the directory exists
     storage_dir.mkdir(exist_ok=True)
@@ -40,19 +44,21 @@ def save_checkpoint(file_path):
     with open(log_file, 'a+') as log:
         log.writelines(f"{new_filename},{checksum}\n")
 
-    lines = []
-    with open(log_file, 'r') as log:
-        lines = log.readlines()
-        lines = list(filter(lambda l : l.strip() != "", sorted(lines, reverse=True)))
-        if len(lines) > NUM_BACKUP:
-            num_rem = len(lines)-NUM_BACKUP
-            to_remove = lines[-num_rem:]
-            for line in to_remove:
-                file_name, _ = line.strip().split(',')
-                os.remove(storage_dir / file_name)
-            lines = lines[:-num_rem]
-    with open(log_file, 'w') as log:
-        log.writelines(lines)
+    # remove older checkpoint files
+    if num_backup > 0:
+        lines = []
+        with open(log_file, 'r') as log:
+            lines = log.readlines()
+            lines = list(filter(lambda l : l.strip() != "", sorted(lines, reverse=True)))
+            if len(lines) > num_backup:
+                num_rem = len(lines)-num_backup
+                to_remove = lines[-num_rem:]
+                for line in to_remove:
+                    file_name, _ = line.strip().split(',')
+                    os.remove(storage_dir / file_name)
+                lines = lines[:-num_rem]
+        with open(log_file, 'w') as log:
+            log.writelines(lines)
 
     print(f"Saved {file_path.name} as {new_filename}")
     return new_file_path, checksum
@@ -61,7 +67,7 @@ def get_checkpoint(file_path):
     """Find and return the latest file matching a checksum, verifying actual file checksum."""
     file_path = Path(file_path)
     storage_dir = file_path.parent
-    log_file = storage_dir / LOG_FILE
+    log_file = get_logfile_path(file_path)
 
     if not log_file.exists():
         print("WARNING: No log file found.")
@@ -96,29 +102,66 @@ if __name__ == "__main__":
         if not os.path.exists(test_dir):
             break
     os.makedirs(test_dir)
-    filename = "test_z9smon.txt"
+    TEST_NUM_BACKUP = 5
+    SLEEP_TIME = 1.1
+    filename = "test.txt"
     test_file = test_dir / filename
-    def save_text(text):
+    def save_text(test_file, text):
         with open(test_file, 'w') as f:
             test_file.write_text(text)
+
+    def validate_log(file_path):
+        # for each entry in log file, that file should exist with same checkpoint
+        storage_dir = file_path.parent
+        log_file = get_logfile_path(file_path)
+
+        with open(log_file, 'r') as log:
+            lines = log.readlines()
+        for line in lines:
+            tmp = line.strip()
+            if tmp == "":
+                continue
+            tmp = tmp.split(',')
+            filename, checksum = tmp
+            new_file_path = storage_dir / filename
+            assert os.path.isfile(new_file_path)
+            computed_checksum = compute_checksum(new_file_path)
+            assert computed_checksum == checksum
     print("TEST: running save load tests")
-    prev_path, new_path = None, None
+    checkpoint_files = []
     # save and load test
-    for i in range(NUM_BACKUP*2):
-        save_text(f"Hello 12{i}")
-        prev_path = new_path
-        new_path, c = save_checkpoint(test_file)
-        time.sleep(2)
-        print_log(test_dir/LOG_FILE)
-        assert new_path == get_checkpoint(test_file)
-        assert len([f for f in os.listdir(test_dir) if filename in f]) <= NUM_BACKUP
+    for i in range(TEST_NUM_BACKUP*2):
+        save_text(test_file, f"Hello 12{i}")
+        new_path, c = save_checkpoint(test_file, TEST_NUM_BACKUP)
+        checkpoint_files.append(new_path)
+        actual_path = get_checkpoint(test_file)
+        assert str(new_path) == str(actual_path), f"assertion failed expected path: {new_path}, actual: {actual_path}"
+        assert len([f for f in os.listdir(test_dir) if filename in f]) <= TEST_NUM_BACKUP
+        assert c == compute_checksum(new_path)
+        validate_log(test_file)
+        time.sleep(SLEEP_TIME)
     
     print("TEST: running checksum integrity tests")
     # integrity test
-    with open(new_path, 'w') as f:
-        f.write("-------")
-    assert prev_path == get_checkpoint(test_file)
-    print("all passed")
+    checkpoint_files.reverse()
+    get_idx = 1
+    for file in checkpoint_files[:TEST_NUM_BACKUP-1]:
+        with open(file, 'w') as f:
+            f.write("-------")
+        actual = str(get_checkpoint(test_file))
+        expected = str(checkpoint_files[get_idx])
+        assert expected == actual, f"assertion failed expected path: {expected}, actual: {actual}"
+        get_idx += 1
+
+    print("TEST: no delete")
+    checkpoint_test_file = test_file.parent / "checkpoint.txt"
+    for i in range(TEST_NUM_BACKUP*2):
+        save_text(checkpoint_test_file, f"Hello 12{i}")
+        save_checkpoint(checkpoint_test_file)
+        validate_log(checkpoint_test_file)
+        time.sleep(SLEEP_TIME)
     import shutil
     shutil.rmtree(test_dir)
+
+    print("all passed")
 
