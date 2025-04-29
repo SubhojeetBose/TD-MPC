@@ -18,6 +18,7 @@ width: 64
 # train settings
 num_train_frames: 2000000
 num_seed_frames: 8000
+num_iteration_frames: 20
 
 # eval
 eval_every_frames: 2000
