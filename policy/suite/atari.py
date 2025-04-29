@@ -58,5 +58,4 @@ def make(name, seed, num_frames, height, width, obs_type):
     # env = NanCheckWrapper(env)
     if obs_type == 'pixels':
         env = Pixels(env, num_frames, height, width)
-    env = gym.wrappers.TimeLimit(env, 100)
     return env

@@ -40,7 +40,7 @@ def noisy_logits_to_softmax_torch(means, sigma):
 class TOLD(nn.Module):
     def __init__(self, frame_cnt, img_sz, latent_dim, action_dim, is_image, obs_dim):
         super().__init__()
-        self._encoder = networks.EncoderNN(frame_cnt, img_sz, latent_dim, is_image, obs_dim)
+        # self._encoder = networks.EncoderNN(frame_cnt, img_sz, latent_dim, is_image, obs_dim)
         self._dynamics = networks.DynamicsNN(latent_dim, action_dim)
         self._reward = networks.RewardNN(latent_dim, action_dim)
         self._policy = networks.PolicyNN(latent_dim, action_dim)
@@ -51,7 +51,7 @@ class TOLD(nn.Module):
             m[-1].bias.data.fill_(0)
     
     def encoder_states(self, obs):
-        return self._encoder(obs)
+        return obs
 
     def next_state_reward(self, latent_z, action):
         return self._dynamics(latent_z, action), self._reward(latent_z, action)
@@ -64,6 +64,7 @@ class TOLD(nn.Module):
 
 class Agent:
     def __init__(self, obs_type, obs_shape, frame_cnt, img_sz, latent_dim, action_dim, lr, nums_samples = 500, num_pi_trajs = 50, num_horizon = 5, iterations = 10, rho = 0.5, consistency_coef = 2, reward_coef = 0.5, value_coef = 0.1, device='cpu'):
+        latent_dim = obs_shape[0]
         self.device = device
         is_image = obs_type == 'pixels'
         self.model = TOLD(frame_cnt, img_sz, latent_dim, action_dim, is_image, obs_shape[0]).to(self.device)
