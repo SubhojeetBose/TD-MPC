@@ -54,8 +54,9 @@ class NanCheckWrapper(gym.Wrapper):
 
 def make(name, seed, num_frames, height, width, obs_type):
     env = gym.make(name, render_mode="rgb_array")
-    env = gym.wrappers.RescaleAction(env, -1, 1)
+    # env = gym.wrappers.RescaleAction(env, -1, 1)
     # env = NanCheckWrapper(env)
     if obs_type == 'pixels':
         env = Pixels(env, num_frames, height, width)
+    env = gym.wrappers.TimeLimit(env, 100)
     return env

@@ -8,7 +8,7 @@ suite: atari
 name: 'atari'
 
 # task settings
-frame_stack: 1
+frame_stack: 3
 action_repeat: 1
 discount: 0.99
 hidden_dim: 256

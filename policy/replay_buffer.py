@@ -89,7 +89,7 @@ class ReplayBuffer():
         return self
 
     def add(self, episode: Episode):
-        self._obs[self.idx:self.idx+self.cfg.episode_length] = episode.obs[:-1] if self.cfg.obs_type == 'features' else episode.obs[:-1, -3:]
+        self._obs[self.idx:self.idx+self.cfg.episode_length] = episode.obs[:-1] if self.cfg.obs_type == 'features' else episode.obs[:-1]
         self._last_obs[self.idx//self.cfg.episode_length] = episode.obs[-1]
         self._action[self.idx:self.idx+self.cfg.episode_length] = episode.action
         self._reward[self.idx:self.idx+self.cfg.episode_length] = episode.reward
@@ -110,14 +110,10 @@ class ReplayBuffer():
     def _get_obs(self, arr, idxs):
         if self.cfg.obs_type == 'features':
             return arr[idxs]
-        obs = torch.empty((self.cfg.batch_size, 3*self.cfg.agent.frame_stack, *arr.shape[-2:]), dtype=arr.dtype, device=torch.device('cuda'))
-        obs[:, -3:] = arr[idxs].to(self.cfg.device)
+        obs = torch.empty((self.cfg.batch_size, 3*self.cfg.suite.frame_stack, *arr.shape[-2:]), dtype=arr.dtype, device=torch.device(self.cfg.device))
+        obs = arr[idxs].to(self.cfg.device)
         _idxs = idxs.clone()
         mask = torch.ones_like(_idxs, dtype=torch.bool)
-        for i in range(1, self.cfg.agent.frame_stack):
-            mask[_idxs % self.cfg.episode_length == 0] = False
-            _idxs[mask] -= 1
-            obs[:, -(i+1)*3:-i*3] = arr[_idxs].to(self.cfg.device)
         return obs.float()
 
     def sample(self):
@@ -129,7 +125,7 @@ class ReplayBuffer():
         weights /= weights.max()
 
         obs = self._get_obs(self._obs, idxs)
-        next_obs_shape = self._last_obs.shape[1:] if self.cfg.obs_type == 'features' else (3*self.cfg.agent.frame_stack, *self._last_obs.shape[-2:])
+        next_obs_shape = self._last_obs.shape[1:] if self.cfg.obs_type == 'features' else (3*self.cfg.suite.frame_stack, *self._last_obs.shape[-2:])
         next_obs = torch.empty((self.cfg.agent.num_horizon+1, self.cfg.batch_size, *next_obs_shape), dtype=obs.dtype, device=obs.device)
         action = torch.empty((self.cfg.agent.num_horizon+1, self.cfg.batch_size, *self._action.shape[1:]), dtype=torch.float32, device=self.device)
         reward = torch.empty((self.cfg.agent.num_horizon+1, self.cfg.batch_size), dtype=torch.float32, device=self.device)

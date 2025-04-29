@@ -29,10 +29,18 @@ def orthogonal_init(m):
         if m.bias is not None:
             nn.init.zeros_(m.bias)
 
+def noisy_logits_to_softmax_torch(means, sigma):
+    means = torch.as_tensor(means, dtype=torch.float32)
+    denom = torch.sqrt(1 + (torch.pi * sigma**2) / 8)
+    adjusted_means = means / denom
+    exp_means = torch.exp(adjusted_means - adjusted_means.max())  # numerical stability
+    probs = exp_means / exp_means.sum()
+    return torch.distributions.Categorical(probs)
+
 class TOLD(nn.Module):
     def __init__(self, frame_cnt, img_sz, latent_dim, action_dim, is_image, obs_dim):
         super().__init__()
-        # self._encoder = networks.EncoderNN(frame_cnt, img_sz, latent_dim, is_image, obs_dim)
+        self._encoder = networks.EncoderNN(frame_cnt, img_sz, latent_dim, is_image, obs_dim)
         self._dynamics = networks.DynamicsNN(latent_dim, action_dim)
         self._reward = networks.RewardNN(latent_dim, action_dim)
         self._policy = networks.PolicyNN(latent_dim, action_dim)
@@ -43,7 +51,7 @@ class TOLD(nn.Module):
             m[-1].bias.data.fill_(0)
     
     def encoder_states(self, obs):
-        return obs
+        return self._encoder(obs)
 
     def next_state_reward(self, latent_z, action):
         return self._dynamics(latent_z, action), self._reward(latent_z, action)
@@ -56,7 +64,6 @@ class TOLD(nn.Module):
 
 class Agent:
     def __init__(self, obs_type, obs_shape, frame_cnt, img_sz, latent_dim, action_dim, lr, nums_samples = 500, num_pi_trajs = 50, num_horizon = 5, iterations = 10, rho = 0.5, consistency_coef = 2, reward_coef = 0.5, value_coef = 0.1, device='cpu'):
-        latent_dim = obs_shape[0]
         self.device = device
         is_image = obs_type == 'pixels'
         self.model = TOLD(frame_cnt, img_sz, latent_dim, action_dim, is_image, obs_shape[0]).to(self.device)
@@ -93,14 +100,13 @@ class Agent:
             G += discount * reward
             discount *= gamma
         G += discount * self.model.get_q(next_z, self.model.sample_action(next_z))
-        return G
-    
+        return G 
 
     @torch.no_grad()
     def plan(self, step, obs, num_seed_step, isFirst = True, eval_mode = False):
         # Use random actions for first 5000 steps
-        if step < num_seed_step and not eval_mode:
-            return torch.empty(self.action_dim, dtype=torch.float32, device=self.device).uniform_(-1, 1).cpu().numpy()
+        if step < num_seed_step:
+            return random.randint(0, self.action_dim-1)
         
         obs = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
         
@@ -143,14 +149,16 @@ class Agent:
         actions = top_actions[:, np.random.choice(np.arange(score.shape[0]), p=score)]
         self._prev_mean = mean
         mean, std = actions[0], next_std[0]
-        a = mean
+       
         # if in eval mode we dont random sample else give the mean action
         if not eval_mode:
-            a += std * torch.randn(self.action_dim, device=std.device)
+            a = noisy_logits_to_softmax_torch(mean, std).sample()
+        else:
+            a = torch.argmax(noisy_logits_to_softmax_torch(mean, std).probs)
 
         # if step%100 == 0 and not eval_mode:
         #     print(a)
-        return a.cpu().numpy()
+        return a.item()
     
     def update_pi(self, latent_zs):
         self.pi_optim.zero_grad()

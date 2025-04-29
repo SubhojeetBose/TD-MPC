@@ -52,7 +52,7 @@ class Workspace:
         self.cfg.episode_length = self.train_env.spec.max_episode_steps
         
         self.cfg.agent.obs_shape = self.train_env.observation_space.shape
-        self.cfg.agent.action_dim = self.train_env.action_space.shape[0] # flat action dim
+        self.cfg.agent.action_dim = int(self.train_env.action_space.n) # flat action dim
         self.agent = make_agent(self.cfg)
 
         # create replay buffer
