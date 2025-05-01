@@ -121,8 +121,6 @@ class Agent:
         if not eval_mode:
             a += std * torch.randn(self.action_dim, device=std.device)
 
-        if step%100 == 0 and not eval_mode:
-            print(a)
         return a.cpu().numpy()
     
     def update_pi(self, latent_zs):
