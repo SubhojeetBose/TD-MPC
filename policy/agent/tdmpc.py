@@ -72,59 +72,57 @@ class Agent:
     @torch.no_grad()
     def plan(self, step, obs, num_seed_step, isFirst = True, eval_mode = False):
         # Use random actions for first 5000 steps
-        # if step < num_seed_step and not eval_mode:
-        #     return torch.empty(self.action_dim, dtype=torch.float32, device=self.device).uniform_(-1, 1).cpu().numpy()
+        if step < num_seed_step and not eval_mode:
+            return torch.empty(self.action_dim, dtype=torch.float32, device=self.device).uniform_(-1, 1).cpu().numpy()
         
         obs = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
         
         # sample for N_pi actions using current policy
-        # pi_actions = torch.empty(self.horizon, self.num_pi_trajs, self.action_dim, device=self.device)
-        # latent_z = self.model.encoder_states(obs).repeat(self.num_pi_trajs, 1)
-        # for t in range(self.horizon):
-        #     pi_actions[t] = self.model.sample_action(latent_z)
-        #     latent_z, _ = self.model.next_state_reward(latent_z, pi_actions[t])
+        pi_actions = torch.empty(self.horizon, self.num_pi_trajs, self.action_dim, device=self.device)
+        latent_z = self.model.encoder_states(obs).repeat(self.num_pi_trajs, 1)
+        for t in range(self.horizon):
+            pi_actions[t] = self.model.sample_action(latent_z)
+            latent_z, _ = self.model.next_state_reward(latent_z, pi_actions[t])
 
-        # # get the initial latent state and init mean and std for sampling N random shooting actions
-        # latent_z = self.model.encoder_states(obs).repeat(self.num_samples+self.num_pi_trajs, 1)
-        # mean = torch.zeros(self.horizon, self.action_dim, device=self.device)
-        # std = 2*torch.ones(self.horizon, self.action_dim, device=self.device)
-        # if not isFirst and self._prev_mean is not None:
-        #     mean[:-1] = self._prev_mean[1:]
+        # get the initial latent state and init mean and std for sampling N random shooting actions
+        latent_z = self.model.encoder_states(obs).repeat(self.num_samples+self.num_pi_trajs, 1)
+        mean = torch.zeros(self.horizon, self.action_dim, device=self.device)
+        std = 2*torch.ones(self.horizon, self.action_dim, device=self.device)
+        if not isFirst and self._prev_mean is not None:
+            mean[:-1] = self._prev_mean[1:]
 
-        # # random shooting
-        # for i in range(self.iterations):
-        #     actions = torch.clamp(mean.unsqueeze(1) + std.unsqueeze(1) * \
-		# 		torch.randn(self.horizon, self.num_samples, self.action_dim, device=std.device), -1, 1)
-        #     actions = torch.cat([actions, pi_actions], dim=1)
+        # random shooting
+        for i in range(self.iterations):
+            actions = torch.clamp(mean.unsqueeze(1) + std.unsqueeze(1) * \
+				torch.randn(self.horizon, self.num_samples, self.action_dim, device=std.device), -1, 1)
+            actions = torch.cat([actions, pi_actions], dim=1)
 
-        #     # get top k actions
-        #     value = self.estimate_value(latent_z, actions, self.horizon, 0.99).nan_to_num_(0)
-        #     top_idxs = torch.topk(value.squeeze(1), 64, dim=0).indices
-        #     top_value, top_actions = value[top_idxs], actions[:, top_idxs]
+            # get top k actions
+            value = self.estimate_value(latent_z, actions, self.horizon, 0.99).nan_to_num_(0)
+            top_idxs = torch.topk(value.squeeze(1), 64, dim=0).indices
+            top_value, top_actions = value[top_idxs], actions[:, top_idxs]
 
-        #     # get next mean and std deviation
-        #     max_value = top_value.max(0)[0]
-        #     score = torch.exp((top_value - max_value))
-        #     score /= score.sum(0)
-        #     next_mean = torch.sum(score.unsqueeze(0) * top_actions, dim=1) / (score.sum(0) + 1e-9)
-        #     next_std = torch.sqrt(torch.sum(score.unsqueeze(0) * (top_actions - next_mean.unsqueeze(1)) ** 2, dim=1) / (score.sum(0) + 1e-9))
-        #     next_std = next_std.clamp_(1e-3, 2)
-        #     mean, std = next_mean, next_std
+            # get next mean and std deviation
+            max_value = top_value.max(0)[0]
+            score = torch.exp((top_value - max_value))
+            score /= score.sum(0)
+            next_mean = torch.sum(score.unsqueeze(0) * top_actions, dim=1) / (score.sum(0) + 1e-9)
+            next_std = torch.sqrt(torch.sum(score.unsqueeze(0) * (top_actions - next_mean.unsqueeze(1)) ** 2, dim=1) / (score.sum(0) + 1e-9))
+            next_std = next_std.clamp_(1e-3, 2)
+            mean, std = next_mean, next_std
 
-        # # get the action based on Jth mean and std
-        # score = score.squeeze(1).cpu().numpy()
-        # actions = top_actions[:, np.random.choice(np.arange(score.shape[0]), p=score)]
-        # self._prev_mean = mean
-        # mean, std = actions[0], next_std[0]
-        # a = mean
-        # # if in eval mode we dont random sample else give the mean action
-        # if not eval_mode:
-        #     a += std * torch.randn(self.action_dim, device=std.device)
-        
-        a = self.model.sample_action(obs)[0]
+        # get the action based on Jth mean and std
+        score = score.squeeze(1).cpu().numpy()
+        actions = top_actions[:, np.random.choice(np.arange(score.shape[0]), p=score)]
+        self._prev_mean = mean
+        mean, std = actions[0], next_std[0]
+        a = mean
+        # if in eval mode we dont random sample else give the mean action
+        if not eval_mode:
+            a += std * torch.randn(self.action_dim, device=std.device)
 
-        # if step%100 == 0 and not eval_mode:
-        #     print(a)
+        if step%100 == 0 and not eval_mode:
+            print(a)
         return a.cpu().numpy()
     
     def update_pi(self, latent_zs):
