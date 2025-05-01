@@ -11,7 +11,7 @@ name: 'atari'
 frame_stack: 1
 action_repeat: 1
 discount: 0.99
-hidden_dim: 256
+hidden_dim: 8 
 height: 64
 width: 64
 
